@@ -1,0 +1,23 @@
+# Build artifacts
+.build/
+
+# Python environment & secrets
+scripts/.venv/
+scripts/.env
+
+# Local run logs
+logs/
+
+# macOS / Python cruft
+.DS_Store
+__pycache__/
+*.pyc
+
+# Local audio + transcripts never belong in the repo
+*.m4a
+*.mp3
+*.wav
+*.mp4
+
+# Internal cold-start handoff doc (personal paths) — keep local, do not publish
+HANDOFF.md
