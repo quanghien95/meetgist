@@ -74,6 +74,25 @@ public enum Prompts {
         """
     }
 
+    /// Call 2 (template mode): fill the user's own template from the transcript.
+    public static func templatedNotes(_ template: String) -> String {
+        """
+        Below is a verbatim meeting transcript. Produce meeting notes by filling in the
+        TEMPLATE below using only what's in the transcript.
+
+        Rules:
+        - Keep the template's exact structure, sections, and headings.
+        - Fill each section from the transcript. If a section has no relevant content,
+          write "—". Do not invent information.
+        - Write in the dominant language of the transcript (Simplified Chinese if the
+          transcript is mostly Chinese, otherwise English).
+        - Output ONLY the filled template — no preamble, no commentary.
+
+        TEMPLATE:
+        \(template)
+        """
+    }
+
     /// Call 2: transcript text → polished minutes + summary (text-only, no audio).
     public static let polished: String = """
     Below is a verbatim meeting transcript. Based on it, produce two sections.

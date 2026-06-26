@@ -79,7 +79,8 @@ public enum Pipelines {
     /// Build a pipeline from the selected transcription + notes providers and their
     /// keys. Throws a `PipelineError` describing what's missing/unsupported.
     public static func make(transcription: Provider, transcriptionKey: String?,
-                            notes: Provider, notesKey: String?) throws -> MeetingPipeline {
+                            notes: Provider, notesKey: String?,
+                            notesTemplate: String? = nil) throws -> MeetingPipeline {
         let transcriber: Transcriber
         switch transcription.transcribeStyle {
         case "gemini":
@@ -99,13 +100,14 @@ public enum Pipelines {
         case "gemini":
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
             writer = GeminiNotesWriter(apiKey: key, baseURL: notes.baseURL,
-                                       model: notes.notesModel ?? "gemini-2.5-flash")
+                                       model: notes.notesModel ?? "gemini-2.5-flash",
+                                       template: notesTemplate)
         case "chat":
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
             guard let model = notes.notesModel, !model.isEmpty else {
                 throw PipelineError.unsupported("\(notes.name) needs a model name in Settings.")
             }
-            writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model)
+            writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model, template: notesTemplate)
         default:
             throw PipelineError.unsupported("\(notes.name) can't write notes.")
         }

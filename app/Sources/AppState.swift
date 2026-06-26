@@ -30,6 +30,8 @@ final class AppState: ObservableObject {
     @Published var outputDir: URL { didSet { persistOutput(); refresh() } }
     @Published var presence: Presence { didSet { UserDefaults.standard.set(presence.rawValue, forKey: Keys.presence) } }
     @Published var autoTranscribe: Bool { didSet { UserDefaults.standard.set(autoTranscribe, forKey: Keys.auto) } }
+    @Published var useTemplate: Bool { didSet { UserDefaults.standard.set(useTemplate, forKey: Keys.useTemplate) } }
+    @Published var notesTemplate: String { didSet { UserDefaults.standard.set(notesTemplate, forKey: Keys.template) } }
     @Published var transcriptionProviderID: String { didSet { UserDefaults.standard.set(transcriptionProviderID, forKey: Keys.transcribe); refreshKeyFlag() } }
     @Published var notesProviderID: String { didSet { UserDefaults.standard.set(notesProviderID, forKey: Keys.notes); refreshKeyFlag() } }
     @Published var customProviders: [Provider] { didSet { saveCustom() } }
@@ -51,6 +53,7 @@ final class AppState: ObservableObject {
     private enum Keys {
         static let output = "MeetGistOutputDir", presence = "MeetGistPresence", auto = "MeetGistAutoTranscribe"
         static let transcribe = "MeetGistTranscribeProvider", notes = "MeetGistNotesProvider", custom = "MeetGistCustomProviders"
+        static let useTemplate = "MeetGistUseTemplate", template = "MeetGistTemplate"
     }
 
     init() {
@@ -59,6 +62,8 @@ final class AppState: ObservableObject {
         else { outputDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents/meetgist") }
         presence = Presence(rawValue: d.string(forKey: Keys.presence) ?? "menuBar") ?? .menuBar
         autoTranscribe = (d.object(forKey: Keys.auto) as? Bool) ?? true
+        useTemplate = (d.object(forKey: Keys.useTemplate) as? Bool) ?? false
+        notesTemplate = d.string(forKey: Keys.template) ?? ""
         transcriptionProviderID = d.string(forKey: Keys.transcribe) ?? "gemini"
         notesProviderID = d.string(forKey: Keys.notes) ?? "gemini"
         if let data = d.data(forKey: Keys.custom), let arr = try? JSONDecoder().decode([Provider].self, from: data) { customProviders = arr }
@@ -145,8 +150,10 @@ final class AppState: ObservableObject {
             guard let self else { return }
             do {
                 let tp = self.effective(self.transcriptionProvider), np = self.effective(self.notesProvider)
+                let template = (self.useTemplate && !self.notesTemplate.isEmpty) ? self.notesTemplate : nil
                 let pipeline = try Pipelines.make(transcription: tp, transcriptionKey: self.key(for: tp),
-                                                  notes: np, notesKey: self.key(for: np))
+                                                  notes: np, notesKey: self.key(for: np),
+                                                  notesTemplate: template)
                 _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline) { msg in
                     Task { @MainActor in
                         self.status = msg

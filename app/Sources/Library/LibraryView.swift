@@ -105,16 +105,47 @@ struct EmptyLibrary: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
     var body: some View {
-        VStack(spacing: 14) {
-            Text("▸ meetgist").font(Theme.mono(15, .semibold)).foregroundStyle(Theme.mint)
-            Text(loc.t(L.tagline)).font(Theme.ui(15)).foregroundStyle(Theme.text)
-            Text(loc.t(L.noMeetings)).font(Theme.ui(12)).foregroundStyle(Theme.muted)
-                .multilineTextAlignment(.center).frame(maxWidth: 360)
+        VStack(spacing: 20) {
+            Image("Logo").resizable().interpolation(.high)
+                .frame(width: 108, height: 108)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .shadow(color: Theme.mint.opacity(0.18), radius: 26, y: 8)
+
+            VStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("MeetGist").font(.system(size: 38, weight: .bold)).foregroundStyle(Theme.text)
+                        .tracking(-0.5)
+                    Text("记了吗").font(.system(size: 22, weight: .medium)).foregroundStyle(Theme.muted)
+                }
+                Text(loc.t(L.tagline)).font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.mint)
+            }
+
+            HStack(spacing: 10) {
+                outputPill("doc.text", loc.t(L.transcript))
+                outputPill("list.bullet.rectangle.portrait", loc.t(L.minutes))
+                outputPill("sparkles", loc.t(L.summary))
+            }
+
+            Text(loc.t(L.emptyHint)).font(Theme.ui(12)).foregroundStyle(Theme.muted)
+                .multilineTextAlignment(.center).frame(maxWidth: 420).lineSpacing(2)
+
             if !state.hasKeys {
-                Text(loc.t(L.needKey)).font(Theme.mono(11)).foregroundStyle(Theme.amber)
+                Button {
+                    state.showSettings = true
+                } label: { Label(loc.t(L.needKey), systemImage: "key.fill") }
+                    .buttonStyle(GhostButton())
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.bg)
+    }
+
+    private func outputPill(_ symbol: String, _ text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).font(.system(size: 10)).foregroundStyle(Theme.teal)
+            Text(text).font(Theme.mono(10)).foregroundStyle(Theme.muted)
+        }
+        .padding(.horizontal, 11).padding(.vertical, 6)
+        .background(Theme.panel2).clipShape(Capsule())
     }
 }

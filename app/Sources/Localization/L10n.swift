@@ -84,6 +84,9 @@ enum L {
     static let noMeetings = LStr(en: "No meetings yet. Press Record (or ⌥⌘K) to start.",
                                  zh: "还没有记录。按下录制（或 ⌥⌘K）开始。")
     static let record     = LStr(en: "Record", zh: "录制")
+    static let emptyHint  = LStr(
+        en: "Press ⌥⌘K (or Record) to capture a meeting. MeetGist writes the transcript, polished minutes, and a summary with decisions & action items.",
+        zh: "按 ⌥⌘K（或点「录制」）开始记录。结束后自动生成转录、精炼纪要，以及含关键决定与行动项的摘要。")
 
     // Detail sections
     static let summary      = LStr(en: "Summary", zh: "摘要")
@@ -116,6 +119,12 @@ enum L {
     static let granted = LStr(en: "Granted", zh: "已授权")
     static let notGranted = LStr(en: "Not granted", zh: "未授权")
     static let openSystemSettings = LStr(en: "Open System Settings", zh: "打开系统设置")
+    static let templateSection = LStr(en: "Notes template", zh: "笔记模板")
+    static let useTemplateLabel = LStr(en: "Use a custom template for the notes", zh: "用自定义模板生成笔记")
+    static let loadFromFile = LStr(en: "Load from file…", zh: "从文件载入…")
+    static let templateHint = LStr(
+        en: "When on, the Notes step fills your template from the transcript instead of the default minutes/summary. Paste any structure with headings (Markdown works).",
+        zh: "开启后，笔记将按你的模板从转录中填充，而不是默认纪要/摘要。可粘贴任意带标题的结构（支持 Markdown）。")
 
     // Messages
     static let needKey = LStr(en: "Add an API key in Settings to generate notes.",

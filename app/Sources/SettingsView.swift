@@ -82,6 +82,8 @@ struct SettingsView: View {
                         }.padding(6)
                     }
 
+                    TemplateSettings().environmentObject(state).environmentObject(loc)
+
                     GroupBox(loc.t(L.privacy)) {
                         Text(loc.t(L.privacyStatement)).font(.callout).foregroundStyle(.secondary).padding(6)
                     }
@@ -246,5 +248,43 @@ struct LaunchAtLoginToggle: View {
                 do { try v ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister() }
                 catch { on = (SMAppService.mainApp.status == .enabled) }
             }
+    }
+}
+
+struct TemplateSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
+    var body: some View {
+        GroupBox(loc.t(L.templateSection)) {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle(loc.t(L.useTemplateLabel), isOn: $state.useTemplate)
+                TextEditor(text: $state.notesTemplate)
+                    .font(Theme.mono(11))
+                    .frame(height: 130)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .background(Theme.panel2)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.line, lineWidth: 1))
+                    .disabled(!state.useTemplate)
+                    .opacity(state.useTemplate ? 1 : 0.5)
+                HStack {
+                    Button(loc.t(L.loadFromFile)) { loadFile() }
+                    Spacer()
+                }
+                Text(loc.t(L.templateHint)).font(.caption).foregroundStyle(.secondary)
+            }.padding(6)
+        }
+    }
+
+    private func loadFile() {
+        let p = NSOpenPanel()
+        p.canChooseFiles = true
+        p.canChooseDirectories = false
+        p.allowsMultipleSelection = false
+        if p.runModal() == .OK, let u = p.url, let s = try? String(contentsOf: u, encoding: .utf8) {
+            state.notesTemplate = s
+            state.useTemplate = true
+        }
     }
 }
