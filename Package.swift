@@ -12,5 +12,6 @@ let package = Package(
     targets: [
         .target(name: "MeetGistKit"),
         .executableTarget(name: "meetgist", dependencies: ["MeetGistKit"]),
+        .testTarget(name: "MeetGistKitTests", dependencies: ["MeetGistKit"]),
     ]
 )
