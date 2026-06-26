@@ -10,24 +10,23 @@ let package = Package(
         .executable(name: "meetgist", targets: ["meetgist"]),
         .executable(name: "MeetGistApp", targets: ["MeetGistApp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.2.0"),
+    ],
     targets: [
         .target(name: "MeetGistKit"),
         .executableTarget(name: "meetgist", dependencies: ["MeetGistKit"]),
-        // The native SwiftUI app. Open Package.swift in Xcode and run the
-        // "MeetGistApp" scheme. The Info.plist (bundle id + usage strings) is
-        // embedded into the binary so Microphone/Screen-Recording prompts work.
+        // SwiftUI app sources live in app/Sources and are the source of truth for
+        // BOTH this SPM target (headless compile-check: `swift build`) and the real
+        // Xcode app (app/project.yml → MeetGist.xcodeproj, which adds the bundle,
+        // app icon, entitlements). KeyboardShortcuts powers the global hotkey.
         .executableTarget(
             name: "MeetGistApp",
-            dependencies: ["MeetGistKit"],
-            exclude: ["Info.plist"],
-            linkerSettings: [
-                .unsafeFlags([
-                    "-Xlinker", "-sectcreate",
-                    "-Xlinker", "__TEXT",
-                    "-Xlinker", "__info_plist",
-                    "-Xlinker", "Sources/MeetGistApp/Info.plist",
-                ])
-            ]
+            dependencies: [
+                "MeetGistKit",
+                .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
+            ],
+            path: "app/Sources"
         ),
         .testTarget(name: "MeetGistKitTests", dependencies: ["MeetGistKit"]),
     ]
