@@ -2,8 +2,8 @@
 
 Thank you for contributing to **MeetGist**. This Agreement clarifies the intellectual
 property terms of contributions and **preserves the project's ability to be
-relicensed or dual-licensed in the future** (for example, to offer a commercial
-edition). It applies to individuals and to entities (companies/institutions); an
+relicensed in the future** (so the license can evolve without having to contact every
+contributor). It applies to individuals and to entities (companies/institutions); an
 entity should have an authorized signatory accept on its behalf.
 
 By submitting a Contribution (a pull request, patch, or any code/docs/content) to
@@ -26,10 +26,10 @@ the steward of the MeetGist project and successors/assigns.
 You grant the Project Maintainer a **perpetual, worldwide, non-exclusive,
 royalty-free, irrevocable copyright license** to reproduce, prepare derivative
 works of, publicly display, publicly perform, sublicense, and distribute Your
-Contributions and such derivative works **under any license terms, including both
-the project's open-source license (AGPL-3.0) and a separate commercial/proprietary
-license.** This is what allows the project to be dual-licensed without contacting
-every contributor.
+Contributions and such derivative works **under any license terms, including the
+project's open-source license (AGPL-3.0) and any other license the maintainer may
+choose in the future.** This is what allows the project to be relicensed without
+contacting every contributor.
 
 You retain all right, title, and interest in Your Contributions. This grant is a
 license, not an assignment of copyright.

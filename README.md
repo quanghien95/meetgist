@@ -10,8 +10,12 @@ structured summary (TL;DR, decisions, action items). The two tracks are time-syn
 (`capture_timing.json` → `sync_map.json`) for cleaner diarization. Works on
 pre-recorded audio files too.
 
-> This is the open-source engine (`meetgist`). The polished native app + website
-> live at **[meetgist.app](https://meetgist.app)**.
+> This is the open-source engine (`meetgist`). A native Mac app + website live at
+> **[meetgist.app](https://meetgist.app)**.
+
+> **Status:** a personal, free, open-source project — provided **as-is** under
+> AGPL-3.0, with **no warranty and no commercial support**. It is not a paid
+> product or service. You bring your own free-tier AI API key.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 ![Platform: macOS 14+](https://img.shields.io/badge/Platform-macOS%2014%2B%20(Apple%20Silicon)-lightgrey)

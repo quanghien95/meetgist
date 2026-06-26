@@ -21,3 +21,6 @@ __pycache__/
 
 # Internal cold-start handoff doc (personal paths) — keep local, do not publish
 HANDOFF.md
+
+# commercialization notes are kept private, not in the public repo
+business/strategy.md
