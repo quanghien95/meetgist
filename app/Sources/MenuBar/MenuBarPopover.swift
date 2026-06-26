@@ -42,7 +42,7 @@ struct MenuBarPopover: View {
             VStack(spacing: 1) {
                 row(loc.t(L.openApp), "macwindow") { openMain() }
                 row(loc.t(L.transcribeLatest), "text.viewfinder") {
-                    if let m = state.meetings.first { Task { await state.process(m.dir) } }
+                    if let m = state.meetings.first { state.process(m.dir) }
                 }
                 row(loc.t(L.settings), "gearshape") { state.showSettings = true; openMain() }
                 row(loc.t(L.quit), "power") { NSApp.terminate(nil) }

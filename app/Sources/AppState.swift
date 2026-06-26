@@ -37,7 +37,11 @@ final class AppState: ObservableObject {
 
     /// Set by the app so AppState can flash the HUD on transitions.
     var hud: ((HUDEvent) -> Void)?
+    private var mini: MiniController?
+    func installMiniController(loc: Localization) { if mini == nil { mini = MiniController(state: self, loc: loc) } }
 
+    @Published var processStep = 0   // 0 = transcribing, 1 = summarizing
+    private var processTask: Task<Void, Never>?
     private var recorder: SessionRecorder?
     private var ticker: AnyCancellable?
     private var startDate: Date?
@@ -128,27 +132,43 @@ final class AppState: ObservableObject {
         recorder = nil
         refresh(); selectedID = dir.lastPathComponent
         hud?(HUDEvent(kind: .stopped, text: "Saved"))
-        if hasKeys && autoTranscribe { await process(dir) }
+        if hasKeys && autoTranscribe { process(dir) }
         else { state = .idle; status = hasKeys ? "Saved." : "Saved. Add an API key to generate notes." }
     }
 
-    func process(_ dir: URL) async {
+    func process(_ dir: URL) {
         guard hasKeys else { state = .idle; status = "Recorded. Add an API key in Settings."; return }
-        state = .processing; status = "Processing…"
+        processTask?.cancel()
+        state = .processing; processStep = 0; status = "Transcribing…"
         hud?(HUDEvent(kind: .processing, text: "…"))
-        do {
-            let tp = effective(transcriptionProvider), np = effective(notesProvider)
-            let pipeline = try Pipelines.make(transcription: tp, transcriptionKey: key(for: tp), notes: np, notesKey: key(for: np))
-            _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline) { msg in Task { @MainActor in self.status = msg } }
-            state = .idle; status = "Notes ready."; refresh()
-            hud?(HUDEvent(kind: .done, text: "Done"))
-        } catch {
-            state = .error; lastError = error.localizedDescription; status = "Notes failed"
-            hud?(HUDEvent(kind: .error, text: "Failed"))
+        processTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let tp = self.effective(self.transcriptionProvider), np = self.effective(self.notesProvider)
+                let pipeline = try Pipelines.make(transcription: tp, transcriptionKey: self.key(for: tp),
+                                                  notes: np, notesKey: self.key(for: np))
+                _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline) { msg in
+                    Task { @MainActor in
+                        self.status = msg
+                        if msg.localizedCaseInsensitiveContains("minute") || msg.localizedCaseInsensitiveContains("summar") { self.processStep = 1 }
+                    }
+                }
+                try Task.checkCancellation()
+                self.state = .idle; self.status = "Notes ready."; self.refresh()
+                self.hud?(HUDEvent(kind: .done, text: "Done"))
+            } catch is CancellationError {
+                self.state = .idle; self.status = "Canceled."
+            } catch let e as URLError where e.code == .cancelled {
+                self.state = .idle; self.status = "Canceled."
+            } catch {
+                self.state = .error; self.lastError = error.localizedDescription; self.status = "Notes failed"
+                self.hud?(HUDEvent(kind: .error, text: "Failed"))
+            }
         }
     }
 
-    func reprocessSelected() { guard let m = selectedMeeting else { return }; Task { await process(m.dir) } }
+    func cancelProcessing() { processTask?.cancel(); state = .idle; status = "Canceled." }
+    func reprocessSelected() { guard let m = selectedMeeting else { return }; process(m.dir) }
     func setOutputDir(_ url: URL) { outputDir = url }
 
     // MARK: Live timer + meters

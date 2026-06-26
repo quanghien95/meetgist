@@ -110,6 +110,12 @@ enum L {
     static let presenceMini = LStr(en: "Mini floating controller", zh: "迷你浮窗")
     static let autoTranscribe = LStr(en: "Transcribe automatically after recording",
                                      zh: "录制结束后自动转录")
+    static let launchAtLogin = LStr(en: "Launch at login", zh: "登录时启动")
+    static let microphone = LStr(en: "Microphone", zh: "麦克风")
+    static let screenRecording = LStr(en: "Screen Recording (system audio)", zh: "屏幕录制（系统声音）")
+    static let granted = LStr(en: "Granted", zh: "已授权")
+    static let notGranted = LStr(en: "Not granted", zh: "未授权")
+    static let openSystemSettings = LStr(en: "Open System Settings", zh: "打开系统设置")
 
     // Messages
     static let needKey = LStr(en: "Add an API key in Settings to generate notes.",

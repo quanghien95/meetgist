@@ -57,6 +57,14 @@ struct MeetingDetailView: View {
                 }
                 Spacer()
                 HStack(spacing: 6) {
+                    Menu {
+                        ForEach(Exporter.Format.allCases, id: \.self) { f in
+                            Button(f.label) { exportAs(f) }
+                        }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up").font(.system(size: 12))
+                    }
+                    .menuStyle(.borderlessButton).fixedSize().help(loc.t(L.export))
                     iconButton("doc.on.doc", loc.t(L.copy)) { copy() }
                     iconButton("folder", loc.t(L.reveal)) { NSWorkspace.shared.open(meeting.dir) }
                     iconButton("arrow.clockwise", loc.t(L.regenerate)) { state.reprocessSelected() }
@@ -85,11 +93,17 @@ struct MeetingDetailView: View {
     }
 
     private var placeholder: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             if processingThis {
-                ProgressView()
+                HStack(spacing: 10) {
+                    stepDot(loc.t(L.transcribing), active: state.processStep == 0, done: state.processStep > 0)
+                    Image(systemName: "arrow.right").font(.caption2).foregroundStyle(Theme.line)
+                    stepDot(loc.t(L.summarizing), active: state.processStep == 1, done: false)
+                    Image(systemName: "arrow.right").font(.caption2).foregroundStyle(Theme.line)
+                    stepDot(loc.t(L.done), active: false, done: false)
+                }
                 Text(state.status).font(Theme.mono(11)).foregroundStyle(Theme.muted)
-                Button(loc.t(L.cancel)) { /* cancel hook in P5 */ }.buttonStyle(GhostButton()).disabled(true)
+                Button(loc.t(L.cancel)) { state.cancelProcessing() }.buttonStyle(GhostButton())
             } else if !state.hasKeys {
                 Image(systemName: "key").font(.title).foregroundStyle(Theme.amber)
                 Text(loc.t(L.needKey)).font(Theme.ui(12)).foregroundStyle(Theme.muted)
@@ -110,6 +124,23 @@ struct MeetingDetailView: View {
     private func copy() {
         guard let c = content else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(c, forType: .string)
+    }
+
+    private func exportAs(_ f: Exporter.Format) {
+        if let url = try? Exporter.write(f, sessionDir: meeting.dir) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+    }
+
+    private func stepDot(_ title: String, active: Bool, done: Bool) -> some View {
+        HStack(spacing: 5) {
+            ZStack {
+                Circle().fill(done ? Theme.mint : (active ? Theme.teal : Theme.panel2)).frame(width: 14, height: 14)
+                if done { Image(systemName: "checkmark").font(.system(size: 7, weight: .bold)).foregroundStyle(Theme.bg) }
+                else if active { Circle().fill(Theme.bg).frame(width: 5, height: 5) }
+            }
+            Text(title).font(Theme.mono(10)).foregroundStyle(active || done ? Theme.text : Theme.muted)
+        }
     }
 
     private func md(_ s: String) -> AttributedString {

@@ -4,6 +4,9 @@ import SwiftUI
 import AppKit
 import MeetGistKit
 import KeyboardShortcuts
+import ServiceManagement
+import AVFoundation
+import CoreGraphics
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
@@ -49,6 +52,9 @@ struct SettingsView: View {
                         }.padding(6)
                     }
 
+                    // Audio permissions
+                    AudioSettings().environmentObject(loc)
+
                     // Recording
                     GroupBox(loc.t(L.recordingSection)) {
                         VStack(alignment: .leading, spacing: 10) {
@@ -59,6 +65,7 @@ struct SettingsView: View {
                                 Button("Change…") { chooseFolder() }
                             }
                             Toggle(loc.t(L.autoTranscribe), isOn: $state.autoTranscribe)
+                            LaunchAtLoginToggle().environmentObject(loc)
                         }.padding(6)
                     }
 
@@ -189,5 +196,55 @@ struct CustomProviderRow: View {
         .onAppear {
             name = initial.name; baseURL = initial.baseURL; model = initial.notesModel ?? ""
         }
+    }
+}
+
+struct AudioSettings: View {
+    @EnvironmentObject var loc: Localization
+    @State private var micOK = false
+    @State private var screenOK = false
+
+    var body: some View {
+        GroupBox(loc.t(L.audio)) {
+            VStack(alignment: .leading, spacing: 8) {
+                permRow(loc.t(L.microphone), ok: micOK, pane: "Privacy_Microphone")
+                permRow(loc.t(L.screenRecording), ok: screenOK, pane: "Privacy_ScreenCapture")
+            }
+            .padding(6)
+            .onAppear {
+                micOK = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+                screenOK = CGPreflightScreenCaptureAccess()
+            }
+        }
+    }
+
+    private func permRow(_ name: String, ok: Bool, pane: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: ok ? "checkmark.seal.fill" : "exclamationmark.triangle")
+                .foregroundStyle(ok ? Theme.mint : Theme.amber)
+            Text(name).frame(width: 200, alignment: .leading).font(.callout)
+            Text(ok ? loc.t(L.granted) : loc.t(L.notGranted)).font(.callout).foregroundStyle(.secondary)
+            Spacer()
+            if !ok {
+                Button(loc.t(L.openSystemSettings)) {
+                    if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
+                        NSWorkspace.shared.open(u)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct LaunchAtLoginToggle: View {
+    @EnvironmentObject var loc: Localization
+    @State private var on = false
+    var body: some View {
+        Toggle(loc.t(L.launchAtLogin), isOn: $on)
+            .onAppear { on = (SMAppService.mainApp.status == .enabled) }
+            .onChange(of: on) { _, v in
+                do { try v ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister() }
+                catch { on = (SMAppService.mainApp.status == .enabled) }
+            }
     }
 }

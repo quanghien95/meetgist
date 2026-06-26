@@ -4,8 +4,26 @@ import SwiftUI
 import AppKit
 import KeyboardShortcuts
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ note: Notification) {
+        NSApp.setActivationPolicy(.regular)        // Dock icon + foreground
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async {
+            for w in NSApp.windows where w.canBecomeMain { w.makeKeyAndOrderFront(nil) }
+        }
+    }
+    // Clicking the Dock icon (or reopening) brings the main window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { for w in sender.windows where w.canBecomeMain { w.makeKeyAndOrderFront(nil) } }
+        NSApp.activate(ignoringOtherApps: true)
+        return true
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
+}
+
 @main
 struct MeetGistApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var state = AppState()
     @StateObject private var loc = Localization()
     private let hud = HUDController()
@@ -46,6 +64,7 @@ struct MeetGistApp: App {
 
     @MainActor private func setup() {
         state.hud = { [hud] event in hud.flash(event) }
+        state.installMiniController(loc: loc)
         if !Self.hotkeyRegistered {
             Self.hotkeyRegistered = true
             KeyboardShortcuts.onKeyUp(for: .toggleRecord) { [weak state] in state?.toggleRecording() }
