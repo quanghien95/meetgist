@@ -73,8 +73,7 @@ public final class SessionRecorder: @unchecked Sendable {
 public enum MeetingProcessor {
     @discardableResult
     public static func process(sessionDir: URL,
-                               provider: ProviderID,
-                               model: String?,
+                               pipeline: MeetingPipeline,
                                progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult {
         let mic = sessionDir.appendingPathComponent("mic.m4a")
         let system = sessionDir.appendingPathComponent("system.m4a")
@@ -82,9 +81,6 @@ public enum MeetingProcessor {
         let systemExists = AudioTools.isNonEmpty(system)
         guard micExists || systemExists else {
             throw PipelineError.badResponse("no non-empty audio in session")
-        }
-        guard let pipeline = Pipelines.make(provider: provider, model: model) else {
-            throw PipelineError.missingKey(provider.displayName)
         }
         let result = try await pipeline.process(
             sessionDir: sessionDir, micExists: micExists, systemExists: systemExists,
@@ -97,7 +93,7 @@ public enum MeetingProcessor {
         try write(result.transcript, "transcript.md")
         try write(result.polished, "polished.md")
         try write(result.summary, "summary.md")
-        let meta: [String: Any] = ["provider": provider.rawValue, "model": result.model]
+        let meta: [String: Any] = ["provider": pipeline.providerName, "model": result.model]
         if let d = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted]) {
             try? d.write(to: sessionDir.appendingPathComponent("postprocess_meta.json"))
         }

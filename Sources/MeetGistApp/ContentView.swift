@@ -53,7 +53,7 @@ struct ContentView: View {
                 Circle().fill(state.isRecording ? .red : .secondary).frame(width: 8, height: 8)
                 Text(state.status).font(.callout).foregroundStyle(.secondary)
                 Spacer()
-                if !state.hasKey {
+                if !state.hasKeys {
                     Button("Add API key") { showSettings = true }.buttonStyle(.link)
                 }
             }
@@ -94,7 +94,7 @@ struct EmptyDetail: View {
             Text("Bot-free Mac meeting notes. Press **Record**, hold your meeting, then stop — MeetGist captures your mic and the system audio separately and writes the notes here.")
                 .multilineTextAlignment(.center).foregroundStyle(.secondary)
                 .frame(maxWidth: 420)
-            if !state.hasKey {
+            if !state.hasKeys {
                 Text("Add a free-tier API key in Settings to generate transcripts.")
                     .font(.callout).foregroundStyle(.orange)
             }

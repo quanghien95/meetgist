@@ -20,6 +20,7 @@ public enum PipelineError: Error, LocalizedError {
     case http(Int, String)
     case fileNotReady(String)
     case badResponse(String)
+    case unsupported(String)
 
     public var errorDescription: String? {
         switch self {
@@ -27,42 +28,132 @@ public enum PipelineError: Error, LocalizedError {
         case .http(let code, let body): return "Request failed (HTTP \(code)): \(body)"
         case .fileNotReady(let s): return "Audio upload didn't become ready: \(s)"
         case .badResponse(let s): return "Unexpected response: \(s)"
+        case .unsupported(let s): return s
         }
     }
 }
 
-/// A transcription/notes provider. v1 ships `GeminiPipeline`; the protocol lets
-/// free-tier fallbacks (Groq, ElevenLabs, …) be added without touching the app.
+/// How long a single transcription chunk may be before the audio is split.
+public let kMeetGistChunkSeconds: Double = 20 * 60
+
+// MARK: - Two-slot pipeline
+
+/// Audio → transcript (master timeline, `[MM:SS] Speaker: …`).
+public protocol Transcriber: Sendable {
+    var label: String { get }
+    func transcribe(sessionDir: URL, micExists: Bool, systemExists: Bool,
+                    progress: @escaping @Sendable (String) -> Void) async throws -> String
+}
+
+/// Transcript text → (polished minutes, summary).
+public protocol NotesWriter: Sendable {
+    var label: String { get }
+    func notes(transcript: String,
+               progress: @escaping @Sendable (String) -> Void) async throws -> (polished: String, summary: String)
+}
+
+/// A complete pipeline = one transcriber + one notes writer (possibly different
+/// providers, e.g. Gemini transcription + DeepSeek notes).
+public struct ComposedPipeline: MeetingPipeline, Sendable {
+    public let providerName: String
+    let transcriber: Transcriber
+    let notesWriter: NotesWriter
+
+    public func process(sessionDir: URL, micExists: Bool, systemExists: Bool,
+                        progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult {
+        let transcript = try await transcriber.transcribe(
+            sessionDir: sessionDir, micExists: micExists, systemExists: systemExists, progress: progress)
+        let (polished, summary) = try await notesWriter.notes(transcript: transcript, progress: progress)
+        return PipelineResult(transcript: transcript, polished: polished, summary: summary,
+                              model: "\(transcriber.label) → \(notesWriter.label)")
+    }
+}
+
 public protocol MeetingPipeline: Sendable {
     var providerName: String { get }
-    /// Read system.m4a / mic.m4a from `sessionDir`, return transcript + polished +
-    /// summary. `progress` reports human-readable status for the UI.
-    func process(sessionDir: URL,
-                 micExists: Bool,
-                 systemExists: Bool,
+    func process(sessionDir: URL, micExists: Bool, systemExists: Bool,
                  progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult
 }
 
-public enum ProviderID: String, CaseIterable, Codable, Sendable {
-    case gemini
-    // Free-tier fallbacks planned: groq, elevenlabs
-
-    public var displayName: String {
-        switch self {
-        case .gemini: return "Google Gemini (free tier)"
+public enum Pipelines {
+    /// Build a pipeline from the selected transcription + notes providers and their
+    /// keys. Throws a `PipelineError` describing what's missing/unsupported.
+    public static func make(transcription: Provider, transcriptionKey: String?,
+                            notes: Provider, notesKey: String?) throws -> MeetingPipeline {
+        let transcriber: Transcriber
+        switch transcription.transcribeStyle {
+        case "gemini":
+            guard let key = transcriptionKey, !key.isEmpty else { throw PipelineError.missingKey(transcription.name) }
+            transcriber = GeminiTranscriber(apiKey: key, baseURL: transcription.baseURL,
+                                            model: transcription.transcribeModel ?? "gemini-2.5-flash")
+        case "whisper":
+            guard let key = transcriptionKey, !key.isEmpty else { throw PipelineError.missingKey(transcription.name) }
+            transcriber = WhisperTranscriber(apiKey: key, baseURL: transcription.baseURL,
+                                             model: transcription.transcribeModel ?? "whisper-1")
+        default:
+            throw PipelineError.unsupported("\(transcription.name) can't transcribe audio — pick a transcription provider.")
         }
+
+        let writer: NotesWriter
+        switch notes.notesStyle {
+        case "gemini":
+            guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
+            writer = GeminiNotesWriter(apiKey: key, baseURL: notes.baseURL,
+                                       model: notes.notesModel ?? "gemini-2.5-flash")
+        case "chat":
+            guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
+            guard let model = notes.notesModel, !model.isEmpty else {
+                throw PipelineError.unsupported("\(notes.name) needs a model name in Settings.")
+            }
+            writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model)
+        default:
+            throw PipelineError.unsupported("\(notes.name) can't write notes.")
+        }
+
+        return ComposedPipeline(providerName: "\(transcription.name) → \(notes.name)",
+                                transcriber: transcriber, notesWriter: writer)
     }
-    /// Keychain account name for this provider's API key.
-    public var keyAccount: String { "apikey.\(rawValue)" }
 }
 
-public enum Pipelines {
-    /// Build the pipeline for a provider + key. Returns nil if no key is set.
-    public static func make(provider: ProviderID, model: String?) -> MeetingPipeline? {
-        guard let key = Keychain.get(provider.keyAccount) else { return nil }
-        switch provider {
-        case .gemini:
-            return GeminiPipeline(apiKey: key, model: model ?? GeminiPipeline.defaultModel)
+// MARK: - Transcript helpers (shared by transcribers)
+
+public enum TranscriptText {
+    /// Add `offset` seconds to each `[MM:SS]`/`[HH:MM:SS]` line (for chunked audio).
+    public static func offsetTimestamps(_ transcript: String, by offset: Double) -> String {
+        guard offset > 0 else { return transcript }
+        let pattern = try! NSRegularExpression(pattern: #"^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]"#)
+        var lines: [String] = []
+        for line in transcript.split(separator: "\n", omittingEmptySubsequences: false) {
+            let s = String(line)
+            let range = NSRange(s.startIndex..<s.endIndex, in: s)
+            guard let m = pattern.firstMatch(in: s, range: range) else { lines.append(s); continue }
+            func grp(_ i: Int) -> Int { guard let r = Range(m.range(at: i), in: s) else { return 0 }; return Int(s[r]) ?? 0 }
+            let hasH = m.range(at: 3).location != NSNotFound
+            let secs: Int = hasH ? grp(1) * 3600 + grp(2) * 60 + grp(3) : grp(1) * 60 + grp(2)
+            let total = Double(secs) + offset
+            let rest = String(s[Range(m.range, in: s)!.upperBound...])
+            lines.append("[\(stamp(total))]\(rest)")
         }
+        return lines.joined(separator: "\n")
+    }
+
+    static func stamp(_ seconds: Double) -> String {
+        let t = max(0, Int(seconds)); let h = t / 3600, m = (t % 3600) / 60, s = t % 60
+        return h > 0 ? String(format: "%02d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
+
+    /// Sort `[MM:SS] …` lines by timestamp (used when merging tracks/chunks).
+    public static func sortByTimestamp(_ lines: [String]) -> [String] {
+        func key(_ line: String) -> Double {
+            guard let open = line.firstIndex(of: "["), let close = line.firstIndex(of: "]"),
+                  open < close else { return .greatestFiniteMagnitude }
+            let parts = line[line.index(after: open)..<close].split(separator: ":").compactMap { Int($0) }
+            switch parts.count {
+            case 2: return Double(parts[0] * 60 + parts[1])
+            case 3: return Double(parts[0] * 3600 + parts[1] * 60 + parts[2])
+            default: return .greatestFiniteMagnitude
+            }
+        }
+        return lines.sorted { key($0) < key($1) }
     }
 }

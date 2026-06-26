@@ -36,4 +36,59 @@ public enum AudioTools {
         default: return "application/octet-stream"
         }
     }
+
+    public struct Chunk: Sendable {
+        public let offsetSeconds: Double
+        public let url: URL
+    }
+
+    /// Split `url` into `<= chunkSeconds` m4a slices in `workDir`. Long meetings are
+    /// chunked so transcription doesn't hit model output limits. Returns the single
+    /// original (offset 0) when it's short enough or can't be measured.
+    public static func chunk(_ url: URL, chunkSeconds: Double, workDir: URL) async throws -> [Chunk] {
+        guard let total = await duration(of: url), total > chunkSeconds else {
+            return [Chunk(offsetSeconds: 0, url: url)]
+        }
+        try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        let asset = AVURLAsset(url: url)
+        var chunks: [Chunk] = []
+        var start = 0.0
+        var index = 0
+        while start < total {
+            let len = min(chunkSeconds, total - start)
+            let out = workDir.appendingPathComponent(String(format: "chunk-%04d.m4a", index))
+            try? FileManager.default.removeItem(at: out)
+            guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+                throw NSError(domain: "meetgist.audio", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "export session failed"])
+            }
+            export.outputURL = out
+            export.outputFileType = .m4a
+            export.timeRange = CMTimeRange(
+                start: CMTime(seconds: start, preferredTimescale: 600),
+                duration: CMTime(seconds: len, preferredTimescale: 600))
+            try await export.exportAsync()
+            if FileManager.default.fileExists(atPath: out.path) {
+                chunks.append(Chunk(offsetSeconds: start, url: out))
+            }
+            start += chunkSeconds
+            index += 1
+        }
+        return chunks.isEmpty ? [Chunk(offsetSeconds: 0, url: url)] : chunks
+    }
+}
+
+extension AVAssetExportSession {
+    /// macOS 14-compatible async wrapper around exportAsynchronously. The
+    /// continuation closure captures only `cont` (Sendable); status/error are read
+    /// after it resumes, so `self` isn't captured across the boundary.
+    func exportAsync() async throws {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            exportAsynchronously { cont.resume() }
+        }
+        if status != .completed {
+            throw error ?? NSError(domain: "meetgist.audio", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "export status \(status.rawValue)"])
+        }
+    }
 }

@@ -39,7 +39,7 @@ struct MeetingDetailView: View {
                 Button {
                     state.reprocessSelected()
                 } label: { Label("Regenerate", systemImage: "arrow.clockwise") }
-                    .disabled(state.processing || !state.hasKey)
+                    .disabled(state.processing || !state.hasKeys)
             }
             .padding()
 
@@ -68,7 +68,7 @@ struct MeetingDetailView: View {
             if state.processing {
                 ProgressView()
                 Text(state.status).foregroundStyle(.secondary)
-            } else if !state.hasKey {
+            } else if !state.hasKeys {
                 Image(systemName: "key").font(.title)
                 Text("Add a free-tier API key in Settings, then press Regenerate.")
                     .foregroundStyle(.secondary)
