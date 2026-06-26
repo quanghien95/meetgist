@@ -6,7 +6,7 @@ import CoreGraphics
 // Best-effort meeting-title detection. Requires Screen Recording permission
 // (which we already need for SCK). Returns nil if nothing plausible is on
 // screen — in that case we fall back to the timestamp-only folder name.
-func detectMeetingTitle() -> String? {
+public func detectMeetingTitle() -> String? {
     let meetingApps = [
         "zoom", "zoom.us",
         "google chrome", "chrome", "safari", "firefox", "microsoft edge", "arc", "brave",

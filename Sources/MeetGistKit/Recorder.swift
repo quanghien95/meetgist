@@ -7,7 +7,9 @@ import CoreMedia
 
 // MARK: - System audio via ScreenCaptureKit
 
-final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+    public override init() { super.init() }
+
     private var stream: SCStream?
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
@@ -27,7 +29,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     private var lastBufferPtsSeconds: Double = 0
     private var buffersAppended: Int = 0
 
-    func start(outputURL: URL) async throws {
+    public func start(outputURL: URL) async throws {
         requestedStartHostNs = DispatchTime.now().uptimeNanoseconds
         try? FileManager.default.removeItem(at: outputURL)
 
@@ -90,7 +92,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
     /// Phase-1 sync metadata for the system track. Read on `audioQueue` so the
     /// buffer counters can't race the sample handler. Call after `stop()`.
-    func timing() async -> [String: Any] {
+    public func timing() async -> [String: Any] {
         await withCheckedContinuation { cont in
             audioQueue.async {
                 let status: String
@@ -123,13 +125,13 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     /// Read on `audioQueue` so it can't race the sample handler. A buffer arrives
     /// on a steady cadence as soon as capture works (even during silence), so this
     /// flips to true unless the pipeline is dead — e.g. Screen Recording denied.
-    func hasReceivedAudio() async -> Bool {
+    public func hasReceivedAudio() async -> Bool {
         await withCheckedContinuation { cont in
             audioQueue.async { cont.resume(returning: self.sessionStarted) }
         }
     }
 
-    func stop() async throws {
+    public func stop() async throws {
         if let stream = stream {
             try? await stream.stopCapture()
         }
@@ -147,9 +149,9 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     // MARK: SCStreamOutput (invoked on audioQueue)
-    func stream(_ stream: SCStream,
-                didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
-                of type: SCStreamOutputType) {
+    public func stream(_ stream: SCStream,
+                       didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+                       of type: SCStreamOutputType) {
         guard type == .audio,
               sampleBuffer.isValid,
               CMSampleBufferDataIsReady(sampleBuffer) else { return }
@@ -173,14 +175,16 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @un
         }
     }
 
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
+    public func stream(_ stream: SCStream, didStopWithError error: Error) {
         FileHandle.standardError.write(Data("scstream error: \(error)\n".utf8))
     }
 }
 
 // MARK: - Microphone via AVAudioRecorder
 
-final class MicRecorder {
+public final class MicRecorder {
+    public init() {}
+
     private var recorder: AVAudioRecorder?
 
     // Phase-1 sync anchors. AVAudioRecorder gives no per-sample timestamps, so
@@ -190,7 +194,7 @@ final class MicRecorder {
     private var recordStartedHostNs: UInt64 = 0
     private var stopCalledHostNs: UInt64 = 0
 
-    func start(outputURL: URL) throws {
+    public func start(outputURL: URL) throws {
         requestedStartHostNs = DispatchTime.now().uptimeNanoseconds
         try? FileManager.default.removeItem(at: outputURL)
         let settings: [String: Any] = [
@@ -211,7 +215,7 @@ final class MicRecorder {
     }
 
     /// Phase-1 sync metadata for the mic track. Call after `stop()`.
-    func timing() -> [String: Any] {
+    public func timing() -> [String: Any] {
         [
             "file": "mic.m4a",
             "requested_start_host_ns": requestedStartHostNs,
@@ -227,13 +231,13 @@ final class MicRecorder {
     /// Peak input level in dBFS. Around the floor (≈ -120 dB and below) means
     /// digital silence — mic muted or Microphone permission denied. Returns the
     /// floor if not recording.
-    func peakLevel() -> Float {
+    public func peakLevel() -> Float {
         guard let recorder = recorder, recorder.isRecording else { return -160 }
         recorder.updateMeters()
         return recorder.peakPower(forChannel: 0)
     }
 
-    func stop() {
+    public func stop() {
         stopCalledHostNs = DispatchTime.now().uptimeNanoseconds
         recorder?.stop()
         recorder = nil

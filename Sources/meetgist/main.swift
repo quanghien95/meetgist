@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Longfu Xu
 import Foundation
 import AppKit
+import MeetGistKit
 
 let args = CommandLine.arguments
 
