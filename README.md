@@ -1,5 +1,7 @@
 # MeetGist · 记了吗
 
+**English** | [中文](README.zh-CN.md)
+
 **Get the gist. Skip the rest.** — *抓重点，去废话。*
 
 **MeetGist is an open-source native Mac meeting recorder and AI notes app.**
@@ -22,7 +24,7 @@ pre-recorded audio files too.
 
 > Nothing leaves your Mac until you transcribe, and only then — the audio is sent
 > to your own Gemini (or optional OpenAI) API key. No accounts, no servers, no
-> telemetry. *(中文快速开始见文末。)*
+> telemetry.
 
 ---
 
@@ -381,84 +383,3 @@ Contributions are accepted under a [CLA](CLA.md) that lets the project be
 relicensed or dual-licensed in the future, which preserves the option of a
 separate **commercial license**. For commercial licensing inquiries, contact the
 maintainer via [GitHub](https://github.com/longfuxu).
-
----
-
-## 中文快速开始
-
-meetgist 是一个 **本地优先的 macOS 会议录音 + AI 转录工具**：同时录制你的麦克风和系统声音
-（Zoom / 腾讯会议 / Google Meet 等），自动生成带时间戳的逐字稿、润色后的会议纪要、以及结构化
-摘要（TL;DR、决策、待办）。音频只有在转录时才会上传，且只发送到你自己的 Gemini API key。
-
-### 安装与配置
-
-```bash
-git clone https://github.com/MeetGist/meetgist.git
-cd meetgist
-./setup.sh                       # 自动检查依赖、编译、建环境、生成 .env
-open scripts/.env                # 填入 GEMINI_API_KEY（在 https://aistudio.google.com/apikey 免费获取）
-```
-
-首次录音时，macOS 会请求「屏幕录制」和「麦克风」权限，到
-**系统设置 → 隐私与安全性** 里给对应 App（终端 / Shortcuts.app）打勾即可。
-
-### 录音方式一：终端快捷命令
-
-`./setup.sh` 已自动把以下命令装进你的 shell 配置（`~/.zshrc`）。打开一个新终端
-（或 `source ~/.zshrc`）即可使用：
-
-| 命令 | 作用 |
-|---|---|
-| `meetgist` | 开始录音；再运行一次 **停止并自动转录** |
-| `gist-status` | 显示当前是「录音中」还是「已停止」 |
-| `gist-open` | 打开笔记/输出目录 |
-| `gist-last` | 打开最近一次的会议文件夹 |
-| `gist-tx <文件\|文件夹>` | 转录已有的音频文件或会议文件夹 |
-
-```bash
-meetgist        # 开始录音（开始/停止都会有系统通知）
-gist-status     # ● 录音中  /  ■ 已停止录音
-meetgist        # 再运行一次停止；约 30–120 秒后笔记就绪
-```
-
-### 录音方式二：用快捷键（Shortcut）一键录音
-
-1. 打开 **Shortcuts.app（快捷指令）** → 新建一个快捷指令。
-2. 添加 **Run Shell Script（运行 Shell 脚本）** 动作。
-3. 脚本内容填 `meetgist-toggle.sh` 的绝对路径，例如
-   `/Users/你的用户名/meetgist/meetgist-toggle.sh`。
-4. 在快捷指令设置里给它指定一个键盘快捷键（如 `⌃⌥⌘R`）。
-
-之后按一次快捷键开始录音，再按一次停止并自动转录——无需切到终端。
-
-### 转录已有的音频文件（命令行）
-
-适用于语音备忘录、下载的录音、采访等：
-
-```bash
-scripts/transcribe_meeting.sh ~/Downloads/录音.mp3      # 单个文件
-scripts/transcribe_file.py a.mp3 b.m4a                  # 多个文件
-scripts/transcribe_file.py ~/Downloads/录音文件夹/       # 整个文件夹
-```
-
-### 转录已有文件：在 Finder 里右键 → Quick Action
-
-配置一次，以后在访达里**右键音频文件**就能转录，无需打开终端：
-
-1. 打开 **Shortcuts.app** → 菜单 **文件 ▸ 新建快捷指令**。
-2. 右侧详情面板（ⓘ）勾选 **用作快速操作（Use as Quick Action）** 和 **访达（Finder）**。
-3. 把快捷指令的输入设为 **接收 _文件和文件夹_**。
-4. 添加 **运行 Shell 脚本** 动作：**Shell** 选 `/bin/bash`，**传递输入** 选 **作为参数**，
-   脚本填（把路径换成你 clone 的位置）：
-   ```
-   /path/to/meetgist/scripts/transcribe_meeting.sh "$@"
-   ```
-5. 命名为「**用 meetgist 转录**」并保存。
-
-现在在访达里右键任意 `.m4a/.mp3/.wav/.mp4` 文件（或一个会议文件夹）→
-**快速操作 ▸ 用 meetgist 转录**，转录完成后会有系统通知。
-
----
-
-结果默认保存在 `~/Documents/meetgist/`；可在 `scripts/.env` 里用 `MEETGIST_OUTPUT_DIR`
-改成 Dropbox / iCloud 等同步目录。许可证为 AGPL-3.0，贡献需接受 [CLA](CLA.md)。
