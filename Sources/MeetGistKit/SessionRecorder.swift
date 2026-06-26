@@ -36,6 +36,12 @@ public final class SessionRecorder: @unchecked Sendable {
     public func systemReady() async -> Bool { await system.hasReceivedAudio() }
     /// Mic peak level in dBFS (≈ -160 = silent / no input).
     public func micLevel() -> Float { mic.peakLevel() }
+    /// System-audio peak level in dBFS.
+    public func systemLevel() async -> Float { await system.systemLevel() }
+
+    /// Best-effort pause/resume (mic pauses; system drops buffers, leaving a gap).
+    public func pause() { system.setPaused(true); mic.pause() }
+    public func resume() { system.setPaused(false); mic.resume() }
 
     @discardableResult
     public func stop() async -> URL {

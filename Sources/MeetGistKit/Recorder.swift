@@ -4,6 +4,7 @@ import Foundation
 import AVFoundation
 import ScreenCaptureKit
 import CoreMedia
+import AudioToolbox
 
 // MARK: - System audio via ScreenCaptureKit
 
@@ -28,6 +29,18 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
     private var lastBufferHostNs: UInt64 = 0
     private var lastBufferPtsSeconds: Double = 0
     private var buffersAppended: Int = 0
+    private var lastSystemPeakDb: Float = -160   // live level (dBFS), on audioQueue
+    private var paused = false
+
+    /// Live system-audio peak in dBFS (≈ -160 = silent). Read on `audioQueue`.
+    public func systemLevel() async -> Float {
+        await withCheckedContinuation { cont in
+            audioQueue.async { cont.resume(returning: self.paused ? -160 : self.lastSystemPeakDb) }
+        }
+    }
+
+    /// While paused, buffers are dropped (leaving a silent gap in system.m4a).
+    public func setPaused(_ p: Bool) { audioQueue.async { self.paused = p } }
 
     public func start(outputURL: URL) async throws {
         requestedStartHostNs = DispatchTime.now().uptimeNanoseconds
@@ -159,6 +172,7 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
         guard let writer = writer, let input = input else { return }
         if writer.status == .failed || writer.status == .cancelled { return }
 
+        updateSystemPeak(sampleBuffer)
         let nowNs = DispatchTime.now().uptimeNanoseconds
         let pts = sampleBuffer.presentationTimeStamp.seconds
         if !sessionStarted {
@@ -169,7 +183,7 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
         }
         lastBufferHostNs = nowNs
         if pts.isFinite { lastBufferPtsSeconds = pts }
-        if input.isReadyForMoreMediaData {
+        if !paused, input.isReadyForMoreMediaData {
             input.append(sampleBuffer)
             buffersAppended += 1
         }
@@ -177,6 +191,29 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
         FileHandle.standardError.write(Data("scstream error: \(error)\n".utf8))
+    }
+
+    /// Compute a peak level from the PCM buffer (ScreenCaptureKit delivers Float32).
+    private func updateSystemPeak(_ sb: CMSampleBuffer) {
+        guard let fmt = CMSampleBufferGetFormatDescription(sb),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt)?.pointee,
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 else { return }
+        var bb: CMBlockBuffer?
+        var abl = AudioBufferList()
+        let st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sb, bufferListSizeNeededOut: nil, bufferListOut: &abl,
+            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &bb)
+        guard st == noErr else { return }
+        var peak: Float = 0
+        for buf in UnsafeMutableAudioBufferListPointer(&abl) {
+            guard let data = buf.mData else { continue }
+            let n = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+            let p = data.assumingMemoryBound(to: Float.self)
+            for i in 0..<n { peak = max(peak, abs(p[i])) }
+        }
+        lastSystemPeakDb = peak > 0 ? 20 * log10(peak) : -160
     }
 }
 
@@ -236,6 +273,9 @@ public final class MicRecorder {
         recorder.updateMeters()
         return recorder.peakPower(forChannel: 0)
     }
+
+    public func pause() { recorder?.pause() }
+    public func resume() { recorder?.record() }
 
     public func stop() {
         stopCalledHostNs = DispatchTime.now().uptimeNanoseconds

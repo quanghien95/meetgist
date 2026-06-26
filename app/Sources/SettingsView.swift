@@ -3,47 +3,89 @@
 import SwiftUI
 import AppKit
 import MeetGistKit
+import KeyboardShortcuts
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Settings").font(.title2.bold())
+                Text(loc.t(L.settings)).font(Theme.ui(17, .semibold)).foregroundStyle(Theme.text)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button(loc.t(L.done)) { dismiss() }.keyboardShortcut(.defaultAction)
             }.padding()
+            Divider().overlay(Theme.line)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ProviderSlot(title: "Transcription  ·  audio → text",
-                                 providers: state.transcriptionProviders,
-                                 selection: $state.transcriptionProviderID, slot: "transcribe")
-                    ProviderSlot(title: "Notes  ·  text → minutes & summary",
-                                 providers: state.notesProviders,
-                                 selection: $state.notesProviderID, slot: "notes")
-                    CustomProvidersView()
-
-                    GroupBox("Recordings folder") {
-                        HStack {
-                            Text(state.outputDir.path).lineLimit(1).truncationMode(.middle)
-                                .font(.callout).foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Change…") { chooseFolder() }
+                    // General
+                    GroupBox(loc.t(L.general)) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text(loc.t(L.language)).frame(width: 160, alignment: .leading)
+                                Picker("", selection: $loc.lang) {
+                                    ForEach(Lang.allCases) { Text(loc.name(of: $0)).tag($0) }
+                                }.labelsHidden()
+                            }
+                            HStack {
+                                Text(loc.t(L.recordingPresence)).frame(width: 160, alignment: .leading)
+                                Picker("", selection: $state.presence) {
+                                    Text(loc.t(L.presenceMenuBar)).tag(Presence.menuBar)
+                                    Text(loc.t(L.presenceMini)).tag(Presence.mini)
+                                }.labelsHidden().pickerStyle(.segmented)
+                            }
                         }.padding(6)
                     }
-                    GroupBox("Permissions") {
-                        Text("On first recording macOS asks for **Screen Recording** (system audio) + **Microphone**. Grant both in System Settings → Privacy & Security, then record again.")
-                            .font(.callout).foregroundStyle(.secondary).padding(6)
+
+                    // Hotkey
+                    GroupBox(loc.t(L.hotkey)) {
+                        HStack {
+                            Text("\(loc.t(L.start)) / \(loc.t(L.stop))").frame(width: 160, alignment: .leading)
+                            KeyboardShortcuts.Recorder(for: .toggleRecord)
+                            Spacer()
+                        }.padding(6)
                     }
-                    Text("MeetGist is free and open source (AGPL-3.0). Audio stays on your Mac; only transcription/notes requests go to the provider(s) whose keys you supplied. Mix providers freely — e.g. Gemini transcription + DeepSeek notes.")
-                        .font(.caption).foregroundStyle(.secondary)
+
+                    // Recording
+                    GroupBox(loc.t(L.recordingSection)) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text(state.outputDir.path).lineLimit(1).truncationMode(.middle)
+                                    .font(Theme.mono(11)).foregroundStyle(Theme.muted)
+                                Spacer()
+                                Button("Change…") { chooseFolder() }
+                            }
+                            Toggle(loc.t(L.autoTranscribe), isOn: $state.autoTranscribe)
+                        }.padding(6)
+                    }
+
+                    // AI provider (v1.1 slots)
+                    GroupBox(loc.t(L.aiProvider)) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ProviderSlot(title: "Transcription  ·  audio → text",
+                                         providers: state.transcriptionProviders,
+                                         selection: $state.transcriptionProviderID, slot: "transcribe")
+                            ProviderSlot(title: "Notes  ·  text → minutes & summary",
+                                         providers: state.notesProviders,
+                                         selection: $state.notesProviderID, slot: "notes")
+                            CustomProvidersView()
+                        }.padding(6)
+                    }
+
+                    GroupBox(loc.t(L.privacy)) {
+                        Text(loc.t(L.privacyStatement)).font(.callout).foregroundStyle(.secondary).padding(6)
+                    }
+                    GroupBox(loc.t(L.about)) {
+                        Text(loc.t(L.aboutFree)).font(.callout).foregroundStyle(.secondary).padding(6)
+                    }
                 }.padding()
             }
         }
-        .frame(width: 580, height: 660)
+        .frame(width: 600, height: 680)
+        .background(Theme.bg)
     }
 
     private func chooseFolder() {
