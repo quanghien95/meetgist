@@ -26,6 +26,31 @@ pre-recorded audio files too.
 
 ---
 
+## Native app (developer preview)
+
+A native SwiftUI app is included — a menu-bar recorder + a window with your
+meetings, transcript / minutes / summary, and a Settings panel for your API key.
+It reuses the same recording engine and prompts, with the whole pipeline in Swift
+(no Python or ffmpeg).
+
+Run it from Xcode:
+
+```bash
+open Package.swift          # opens the package in Xcode
+# pick the “MeetGistApp” scheme (top bar), then press Run (⌘R)
+```
+
+or from the terminal: `swift run MeetGistApp`.
+
+First run: macOS will ask for **Screen Recording** + **Microphone**. Open
+**Settings** (gear) and paste a free-tier **Gemini API key**
+(`aistudio.google.com/apikey`) to generate notes — without a key it still records
+the audio. Code lives in `Sources/MeetGistApp/` (UI) and `Sources/MeetGistKit/`
+(engine: recorder, prompts, Gemini pipeline). *Distribution as a signed/notarized
+`.dmg` is not set up yet.*
+
+---
+
 ## What you get
 
 For every meeting (or audio file) meetgist writes a folder containing:
