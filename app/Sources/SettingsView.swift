@@ -258,6 +258,27 @@ struct TemplateSettings: View {
         GroupBox(loc.t(L.templateSection)) {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle(loc.t(L.useTemplateLabel), isOn: $state.useTemplate)
+
+                // Reference templates — the built-in structures, ready to view and tweak.
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(loc.t(L.referenceTemplates)).font(.caption).foregroundStyle(.secondary)
+                    ForEach(NotesTemplateCatalog.builtIn) { tpl in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(tpl.localizedName(zh: loc.effective == .zh)).font(.callout)
+                                Text(tpl.localizedDesc(zh: loc.effective == .zh))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(loc.t(L.useAsStartingPoint)) {
+                                state.notesTemplate = tpl.localizedBody(zh: loc.effective == .zh)
+                                state.useTemplate = true
+                            }
+                            .buttonStyle(.bordered).controlSize(.small)
+                        }
+                    }
+                }
+
                 TextEditor(text: $state.notesTemplate)
                     .font(Theme.mono(11))
                     .frame(height: 130)

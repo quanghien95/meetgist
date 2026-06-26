@@ -18,9 +18,11 @@ targets:
   MeetGist:
     type: application
     platform: macOS
+    # XcodeGen has no `resources:` key — everything (code + asset catalogs) goes under
+    # `sources:`, and it classifies by type. The asset catalog MUST be listed here or
+    # actool never runs and the app ships with no icon (CFBundleIconName/Assets.car).
     sources:
       - path: Sources
-    resources:
       - path: Resources/Assets.xcassets
     dependencies:
       - package: MeetGistKit

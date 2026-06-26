@@ -18,12 +18,16 @@ struct LStr: Sendable {
 @MainActor
 final class Localization: ObservableObject {
     @Published var lang: Lang {
-        didSet { UserDefaults.standard.set(lang.rawValue, forKey: Self.key) }
+        didSet {
+            UserDefaults.standard.set(lang.rawValue, forKey: Self.key)
+            Theme.cjk = effective == .zh
+        }
     }
     private static let key = "MeetGistLang"
 
     init() {
         lang = Lang(rawValue: UserDefaults.standard.string(forKey: Self.key) ?? "system") ?? .system
+        Theme.cjk = effective == .zh   // didSet doesn't fire from init; set explicitly.
     }
 
     var effective: Lang {
@@ -125,6 +129,8 @@ enum L {
     static let templateHint = LStr(
         en: "When on, the Notes step fills your template from the transcript instead of the default minutes/summary. Paste any structure with headings (Markdown works).",
         zh: "开启后，笔记将按你的模板从转录中填充，而不是默认纪要/摘要。可粘贴任意带标题的结构（支持 Markdown）。")
+    static let referenceTemplates = LStr(en: "Start from a reference", zh: "从参考模板开始")
+    static let useAsStartingPoint = LStr(en: "Use", zh: "使用")
 
     // Messages
     static let needKey = LStr(en: "Add an API key in Settings to generate notes.",

@@ -161,12 +161,14 @@ public enum Prompts {
       If LANGUAGE is Simplified Chinese: use natural Chinese section headings
       (e.g. "📑 智能摘要", "📋 待办事项", "✨ 精选语录", "📅 章节摘要", "👥 各发言人立场").
       If LANGUAGE is English: use English section headings.
-    - SUMMARY (everything after ---SUMMARY---): write entirely in LANGUAGE.
-      If LANGUAGE is Simplified Chinese: section headings stay as
-      "## TL;DR / ## Key Decisions / ## Action Items / ## Open Questions /
-      Follow-ups / ## Notable Context" (do not translate the headings), but ALL
-      content under them is in 简体中文. Use 简体, never 繁體.
+    - SUMMARY (everything after ---SUMMARY---): write entirely in LANGUAGE,
+      headings included. Do NOT mix languages.
+      If LANGUAGE is Simplified Chinese: translate the section headings too —
+      "## 摘要 / ## 关键决定 / ## 行动项 / ## 待解决问题 / ## 补充背景" — and write all
+      content in 简体中文. Use 简体, never 繁體.
       If LANGUAGE is English: everything in English.
+    - Consistency: the entire output (every heading, label, and body line) must be in
+      one LANGUAGE. Never put an English heading on Chinese content or vice versa.
     - Be polished and readable on the POLISHED section; be punchy on the summary.
     """
 }

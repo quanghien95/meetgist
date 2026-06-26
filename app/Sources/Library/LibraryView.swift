@@ -115,7 +115,10 @@ struct EmptyLibrary: View {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("MeetGist").font(.system(size: 38, weight: .bold)).foregroundStyle(Theme.text)
                         .tracking(-0.5)
-                    Text("记了吗").font(.system(size: 22, weight: .medium)).foregroundStyle(Theme.muted)
+                    // Show the Chinese wordmark only in Chinese, so English stays all-English.
+                    if loc.effective == .zh {
+                        Text("记了吗").font(.system(size: 22, weight: .medium)).foregroundStyle(Theme.muted)
+                    }
                 }
                 Text(loc.t(L.tagline)).font(.system(size: 17, weight: .medium)).foregroundStyle(Theme.mint)
             }

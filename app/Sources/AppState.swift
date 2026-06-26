@@ -115,6 +115,12 @@ final class AppState: ObservableObject {
     }
 
     private func startRecording() async {
+        // Request the permissions the recorders need, with MeetGist's usage strings,
+        // before touching the capture APIs. Mic blocks on the user's choice; Screen
+        // Recording prompts if needed (system audio stays empty until it's granted +
+        // the app is relaunched, which the Settings → Privacy panel surfaces).
+        _ = await Permissions.ensureMicrophone()
+        _ = Permissions.ensureScreenRecording()
         do {
             let rec = try SessionRecorder(outputDir: outputDir)
             recorder = rec

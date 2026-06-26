@@ -16,9 +16,17 @@ enum Theme {
     static let amber   = Color(hex: 0xF2B85C)   // warning
     static let red     = Color(hex: 0xFF5C5C)   // error / recording
 
+    // Set by `Localization` to match the effective UI language. SF Mono carries no
+    // CJK glyphs, so in Chinese a monospaced run forces a clashing PingFang fallback
+    // mid-string ("mixed fonts"). When CJK, drop the monospaced *design* but keep
+    // monospaced digits, so Latin + 中文 render in one consistent family.
+    static var cjk = false
+
     // Type
     static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        cjk
+            ? .system(size: size, weight: weight).monospacedDigit()
+            : .system(size: size, weight: weight, design: .monospaced)
     }
     static func ui(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight)
