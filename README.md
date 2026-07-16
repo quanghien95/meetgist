@@ -12,7 +12,10 @@ structured summary (TL;DR, decisions, action items). The two tracks are time-syn
 (`capture_timing.json` → `sync_map.json`) for cleaner diarization. Works on
 pre-recorded audio files too.
 
-> This is the open-source engine (`meetgist`). A native Mac app + website live at
+> This is the open-source engine (`meetgist`) — including the **script/CLI
+> edition** for users who prefer the terminal. The script edition was originally
+> developed as `meetrec` and now ships here under the MeetGist name so everything
+> aligns. A native Mac app + website live at
 > **[meetgist.app](https://meetgist.app)**.
 
 > **Status:** a personal, free, open-source project — provided **as-is** under
@@ -25,6 +28,12 @@ pre-recorded audio files too.
 > Nothing leaves your Mac until you transcribe, and only then — the audio is sent
 > to your own Gemini (or optional OpenAI) API key. No accounts, no servers, no
 > telemetry.
+
+> ⚠️ **Recording disclaimer — notify every attendee.** Recording a meeting is
+> privacy-sensitive. Before you press record, **tell all attendees they are being
+> recorded** and get their consent — every meeting, every time. Many jurisdictions
+> have two-party / all-party consent laws. You are solely responsible for
+> complying with the laws that apply to you and your attendees.
 
 ---
 
@@ -347,9 +356,10 @@ listen-only call), so system audio keeps recording.
 
 - **Local-first.** Audio is only uploaded when `postprocess.py` runs, and only to
   *your own* API key. No third-party servers, accounts, or telemetry.
-- **Recording consent.** Many places (e.g. California) require **two-party
-  consent**. Announce that you're recording when others are present. You are
-  responsible for complying with the laws that apply to you.
+- **Recording consent.** **Notify all attendees, before every recording.** Many
+  places (e.g. California) require **two-party or all-party consent** — announce
+  that you're recording whenever others are present, and stop if anyone objects.
+  You are responsible for complying with the laws that apply to you.
 - The API key in `scripts/.env` is plaintext and is git-ignored — never commit it.
 
 ---
