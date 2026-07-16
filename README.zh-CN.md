@@ -91,20 +91,23 @@ cd meetgist
 ./setup.sh
 ```
 
-`./setup.sh` 会帮你检查依赖、编译录音器、建好 Python 环境，并生成一份 `scripts/.env`。接着：
+`./setup.sh` 会帮你检查依赖、编译录音器、建好 Python 环境、生成一份 `scripts/.env`，并把 **`meetgist` 终端命令**（以及 `gist-*` 辅助命令）装进你的 shell。接着：
 
 1. **填入 API key**——打开 `scripts/.env`，设置：
    ```
    GEMINI_API_KEY=你的-key
    ```
-2. **录音**——运行一次开始，再运行一次停止并转录：
+2. **打开一个新终端**（或运行 `source ~/.zshrc`），让 `meetgist` 命令生效。
+3. **录音**——输入一次 `meetgist` 开始，再输入一次停止并自动转录：
    ```bash
-   ./meetgist-toggle.sh
+   meetgist        # ● 开始录音（系统通知确认）
+   meetgist        # ■ 停止——约 30–120 秒后笔记就绪
    ```
-   第一次运行时，macOS 会请求**屏幕录制**和**麦克风**权限（见 [权限设置](#macos-权限)）。
+   第一次运行时，macOS 会请求**屏幕录制**和**麦克风**权限（见 [权限设置](#macos-权限)）。别忘了：录音前**告知所有参会者**。
 
-就这么简单。笔记会出现在 `~/Documents/meetgist/<时间戳>/` 里。
+就这么简单。笔记会出现在 `~/Documents/meetgist/<时间戳>/` 里（可在 `scripts/.env` 里用 `MEETGIST_OUTPUT_DIR` 改路径）。
 
+> 不想装别名？直接调脚本也完全一样：`./meetgist-toggle.sh` 就是同一个录音开关。
 > **小提示：** 想用键盘快捷键开始/停止，把 `./meetgist-toggle.sh` 接到一个 macOS 快捷指令上即可，详见 [快捷键一键录音](#录音方式二快捷键一键录音)。
 
 ---

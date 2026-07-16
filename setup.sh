@@ -56,9 +56,11 @@ if [ "$missing" -ne 0 ]; then
 fi
 
 # --- 2. Build the Swift recorder -------------------------------------------
+# Only the CLI product: script users don't need the SwiftUI app target (that one
+# is `make app`), and this keeps the build fast and free of app-only dependencies.
 echo
 bold "Building the recorder…"
-swift build -c release
+swift build -c release --product meetgist
 ok "binary → .build/release/meetgist"
 
 # --- 3. Python venv + dependencies -----------------------------------------

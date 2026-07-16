@@ -120,21 +120,29 @@ cd meetgist
 ```
 
 `./setup.sh` checks your prerequisites, builds the recorder, creates the Python
-environment, and makes a `scripts/.env` for you. Then:
+environment, makes a `scripts/.env` for you, and installs the **`meetgist`
+terminal command** (plus the `gist-*` helpers) into your shell. Then:
 
 1. **Add your API key** — open `scripts/.env` and set:
    ```
    GEMINI_API_KEY=your-key-here
    ```
-2. **Record** — run the toggle once to start, again to stop and transcribe:
+2. **Open a new terminal** (or run `source ~/.zshrc`) so the `meetgist` command
+   is loaded.
+3. **Record** — type `meetgist` once to start, and again to stop + transcribe:
    ```bash
-   ./meetgist-toggle.sh
+   meetgist        # ● recording starts (a notification confirms it)
+   meetgist        # ■ stop — notes are ready ~30–120 s later
    ```
    The first time, macOS will ask for **Screen Recording** and **Microphone**
-   permission (see [Permissions](#macos-permissions)).
+   permission (see [Permissions](#macos-permissions)). Remember to **notify all
+   attendees** before you record.
 
-That's it. Notes appear in `~/Documents/meetgist/<timestamp>/`.
+That's it. Notes appear in `~/Documents/meetgist/<timestamp>/` (configurable via
+`MEETGIST_OUTPUT_DIR` in `scripts/.env`).
 
+> Prefer no shell aliases? Everything also works by calling the scripts directly —
+> `./meetgist-toggle.sh` is the same record toggle.
 > **Tip:** to start/stop with a keyboard shortcut, wire `./meetgist-toggle.sh` to a
 > macOS Shortcut — see [Hands-free recording](#hands-free-recording-hotkey).
 
