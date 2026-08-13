@@ -86,7 +86,7 @@ public enum Pipelines {
         case "gemini":
             guard let key = transcriptionKey, !key.isEmpty else { throw PipelineError.missingKey(transcription.name) }
             transcriber = GeminiTranscriber(apiKey: key, baseURL: transcription.baseURL,
-                                            model: transcription.transcribeModel ?? "gemini-2.5-flash")
+                                            model: transcription.transcribeModel ?? "gemini-flash-latest")
         case "whisper":
             guard let key = transcriptionKey, !key.isEmpty else { throw PipelineError.missingKey(transcription.name) }
             transcriber = WhisperTranscriber(apiKey: key, baseURL: transcription.baseURL,
@@ -100,7 +100,7 @@ public enum Pipelines {
         case "gemini":
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
             writer = GeminiNotesWriter(apiKey: key, baseURL: notes.baseURL,
-                                       model: notes.notesModel ?? "gemini-2.5-flash",
+                                       model: notes.notesModel ?? "gemini-flash-latest",
                                        template: notesTemplate)
         case "chat":
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }

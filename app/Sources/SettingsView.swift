@@ -180,7 +180,7 @@ struct CustomProviderRow: View {
                 Button(role: .destructive) { state.removeCustom(initial) } label: { Image(systemName: "trash") }
             }
             TextField("Base URL (e.g. https://api.deepseek.com/v1)", text: $baseURL)
-            TextField("Model (e.g. deepseek-chat)", text: $model)
+            TextField("Model (e.g. deepseek-v4-pro)", text: $model)
             HStack {
                 SecureField(state.hasKey(initial) ? "Key saved — paste to replace" : "API key", text: $keyInput)
                 Button("Save") {

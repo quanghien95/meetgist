@@ -294,8 +294,8 @@ All settings live in `scripts/.env` (copied from `scripts/.env.example`).
 |---|---|---|
 | `GEMINI_API_KEY` | — | **Required.** Your Google AI Studio key. |
 | `MEETGIST_OUTPUT_DIR` | `~/Documents/meetgist` | Where recordings + notes are saved. Point it at a Dropbox/iCloud folder to sync across devices. |
-| `GEMINI_MODEL` | `gemini-3.5-flash` | Audio-capable Gemini model for transcription/polishing. |
-| `GEMINI_FALLBACK_MODEL` | `gemini-3.1-flash-lite` | Used if the primary Gemini call fails. |
+| `GEMINI_MODEL` | `gemini-flash-latest` | Audio-capable Gemini model for transcription/polishing (moving alias). |
+| `GEMINI_FALLBACK_MODEL` | `gemini-pro-latest` | Used if the primary Gemini call fails. |
 | `TRANSCRIPT_PROVIDER` | `auto` | `auto` (Gemini, OpenAI for long audio), `gemini`, or `openai`. |
 | `OPENAI_API_KEY` | — | Only needed when OpenAI transcription runs. |
 | `OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | OpenAI transcription model. |
