@@ -51,6 +51,7 @@ final class AppState: ObservableObject {
 
     @Published var processStep = 0   // 0 = transcribing, 1 = summarizing
     private var processTask: Task<Void, Never>?
+    private var localNotesTaskActive = false
     private var recorder: SessionRecorder?
     private var ticker: AnyCancellable?
     private var startDate: Date?
@@ -147,8 +148,13 @@ final class AppState: ObservableObject {
     private func startRecording() async {
         // Recording has absolute priority over the local worker. Cancellation of
         // the active Swift task prevents its completion handler racing recording.
-        processTask?.cancel()
-        await offlineCoordinator.stopForRecording()
+        if offlineCoordinator.activeSessionID != nil {
+            processTask?.cancel()
+            await offlineCoordinator.stopForRecording()
+        } else if localNotesTaskActive {
+            processTask?.cancel()
+            await processTask?.value
+        }
         // Request the permissions the recorders need, with MeetGist's usage strings,
         // before touching the capture APIs. Mic blocks on the user's choice; Screen
         // Recording prompts if needed (system audio stays empty until it's granted +
@@ -177,20 +183,28 @@ final class AppState: ObservableObject {
         recorder = nil
         refresh(); selectedID = dir.lastPathComponent
         hud?(HUDEvent(kind: .stopped, text: "Saved"))
-        if autoTranscribe {
-            if usesOfflineTranscription {
+        if usesOfflineTranscription {
+            if autoTranscribe {
                 if offlineRuntime.state == .ready { process(dir) }
                 else {
                     await offlineCoordinator.markSetupRequired(sessionDir: dir, config: offlineConfig)
                     state = .idle; status = "Saved. Install Local Whisper in Settings to transcribe."
                 }
-            } else if hasKeys { process(dir) }
-            else { state = .idle; status = "Saved. Add API keys in Settings to generate notes." }
-        } else { state = .idle; status = "Saved." }
+            } else { state = .idle; status = "Saved." }
+        } else if hasKeys && autoTranscribe { process(dir) }
+        else {
+            state = .idle
+            status = hasKeys ? "Saved." : "Saved. Add an API key to generate notes."
+        }
     }
 
     func process(_ dir: URL) {
         if usesOfflineTranscription { processOffline(dir); return }
+        if notesProvider.notesStyle == "apple", recorder != nil {
+            lastError = "Apple On-Device Notes cannot run while recording."
+            status = "Stop recording before using Apple On-Device Notes."
+            return
+        }
         processCloud(dir)
     }
 
@@ -199,8 +213,10 @@ final class AppState: ObservableObject {
         processTask?.cancel()
         state = .processing; processStep = 0; status = "Transcribing…"
         hud?(HUDEvent(kind: .processing, text: "…"))
+        localNotesTaskActive = notesProvider.notesStyle == "apple"
         processTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.localNotesTaskActive = false }
             do {
                 let tp = self.effective(self.transcriptionProvider), np = self.effective(self.notesProvider)
                 let template = (self.useTemplate && !self.notesTemplate.isEmpty) ? self.notesTemplate : nil
@@ -228,6 +244,21 @@ final class AppState: ObservableObject {
     }
 
     private func processOffline(_ dir: URL) {
+        guard recorder == nil else {
+            lastError = "Local transcription cannot run while recording."
+            status = "Stop recording before starting local transcription."
+            return
+        }
+        guard state != .processing else {
+            status = "Another processing task is already running."
+            return
+        }
+        if let active = offlineCoordinator.activeSessionID {
+            status = active == dir.lastPathComponent
+                ? "Local transcription is already running."
+                : "Another local transcription is already running."
+            return
+        }
         processTask?.cancel()
         state = .processing; processStep = 0; status = "Starting local transcription…"
         hud?(HUDEvent(kind: .processing, text: "…"))
@@ -290,6 +321,10 @@ final class AppState: ObservableObject {
     }
 
     func generateMinutes(_ dir: URL) {
+        guard recorder == nil else {
+            status = "Stop recording before generating meeting notes."
+            return
+        }
         guard canGenerateMinutes else {
             if notesProvider.notesStyle == "apple" {
                 let availability = AppleFoundationModelsSupport.availability
@@ -302,8 +337,10 @@ final class AppState: ObservableObject {
         }
         processTask?.cancel()
         state = .processing; processStep = 1; status = "Writing minutes & summary…"
+        localNotesTaskActive = notesProvider.notesStyle == "apple"
         processTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.localNotesTaskActive = false }
             do {
                 let provider = self.effective(self.notesProvider)
                 let template = (self.useTemplate && !self.notesTemplate.isEmpty) ? self.notesTemplate : nil

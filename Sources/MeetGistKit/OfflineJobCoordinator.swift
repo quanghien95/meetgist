@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import Foundation
 import Combine
+import Darwin
 
 public enum OfflineCoordinatorError: LocalizedError {
     case runtimeNotReady
@@ -133,8 +134,19 @@ public final class OfflineJobCoordinator: ObservableObject {
         guard let process else { return }
         requestedStopStatus = status
         process.terminate()
-        while process.isRunning {
+        let clock = ContinuousClock()
+        let gracefulDeadline = clock.now.advanced(by: .seconds(2))
+        while process.isRunning && clock.now < gracefulDeadline {
             try? await Task.sleep(for: .milliseconds(100))
+        }
+        // MLX may be inside native inference and unable to observe Python's
+        // cooperative signal flag promptly. Part commits are atomic, so it is safe
+        // to discard the current uncommitted chunk after a short grace period.
+        if process.isRunning {
+            Darwin.kill(process.processIdentifier, SIGKILL)
+            while process.isRunning {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
         }
         if self.process != nil, let activeStore {
             finish(process: process, store: activeStore)

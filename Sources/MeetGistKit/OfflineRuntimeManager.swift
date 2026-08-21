@@ -153,10 +153,14 @@ public final class OfflineRuntimeManager: ObservableObject {
         process.arguments = arguments
         process.standardOutput = log
         process.standardError = log
-        try process.run()
-        let status: Int32 = await withCheckedContinuation { continuation in
+        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { finished in
                 continuation.resume(returning: finished.terminationStatus)
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
             }
         }
         try log.close()

@@ -57,8 +57,16 @@ public enum MeetingStore {
             throw NSError(domain: "MeetGist.MeetingStore", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Meeting name cannot be empty."])
         }
+        let fm = FileManager.default
+        let originalDate = try? meeting.dir.resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
         try (title + "\n").write(to: meeting.dir.appendingPathComponent(titleFile),
                                   atomically: true, encoding: .utf8)
+        // The library uses the session directory mtime as its meeting date and
+        // sort key. A display-only rename must not make an old meeting look new.
+        if let originalDate {
+            try fm.setAttributes([.modificationDate: originalDate], ofItemAtPath: meeting.dir.path)
+        }
     }
 
     private static func displayTitle(for dir: URL) -> String {

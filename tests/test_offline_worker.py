@@ -162,6 +162,40 @@ class OfflineWorkerTests(unittest.TestCase):
             self.assertFalse((parts / "system-0001.json.tmp").exists())
             self.assertTrue(json.loads((parts / "system-0000.json").read_text())["segments"])
 
+    def test_parseable_part_with_invalid_segment_is_reprocessed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary) / "session"
+            parts = session / "transcription" / "parts"
+            parts.mkdir(parents=True)
+            (session / "system.m4a").write_bytes(b"audio")
+            state = initial_state(duration=10.0)
+            worker.atomic_json(session / "transcription" / "state.json", state)
+            worker.atomic_json(parts / "system-0000.json", {
+                "schema_version": 1,
+                "job_id": state["job_id"],
+                "session_id": state["session_id"],
+                "config_id": worker.CONFIG_ID,
+                "track": "system",
+                "chunk_index": 0,
+                "core_start_seconds": 0.0,
+                "core_end_seconds": 10.0,
+                "processing_seconds": 1.0,
+                "segments": [{"text": "missing timestamps"}],
+            })
+            model = FakeModel()
+
+            result = worker.run_job(
+                session,
+                Path("model"),
+                transcriber_factory=lambda *_args, **_kwargs: model,
+                decode=lambda *_args: FakeAudio(10 * worker.SAMPLE_RATE),
+            )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(len(model.calls), 1)
+            repaired = json.loads((parts / "system-0000.json").read_text())
+            self.assertIn("start_seconds", repaired["segments"][0])
+
     def test_offset_only_merge_sorts_tracks(self):
         with tempfile.TemporaryDirectory() as temporary:
             session = Path(temporary) / "session"

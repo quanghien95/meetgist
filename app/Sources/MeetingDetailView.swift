@@ -21,6 +21,16 @@ struct MeetingDetailView: View {
     private var hasMic: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("mic.m4a").path) }
     private var hasSystem: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("system.m4a").path) }
     private var offlineJob: OfflineJobState? { state.offlineJob(for: meeting) }
+    private var isOfflineMeeting: Bool { offlineJob != nil }
+    private var reprocessDisabled: Bool {
+        if state.usesOfflineTranscription {
+            return [.recording, .paused, .processing].contains(state.state)
+                || !state.canStartTranscription
+        }
+        if state.notesProvider.notesStyle == "apple",
+           [.recording, .paused].contains(state.state) { return true }
+        return state.state == .processing || !state.hasKeys
+    }
     private var hasTranscript: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("transcript.md").path) }
     private var hasGeneratedNotes: Bool {
         FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("polished.md").path)
@@ -86,15 +96,16 @@ struct MeetingDetailView: View {
                     .menuStyle(.borderlessButton).fixedSize().help(loc.t(L.export))
                     iconButton("doc.on.doc", loc.t(L.copy)) { copy() }
                     iconButton("folder", loc.t(L.reveal)) { NSWorkspace.shared.open(meeting.dir) }
-                    if hasTranscript {
+                    if isOfflineMeeting && hasTranscript {
                         Button(loc.t(hasGeneratedNotes ? L.regenerateMinutes : L.generateMinutes)) {
                             state.generateMinutes(meeting.dir)
                         }
                             .buttonStyle(GhostButton())
-                            .disabled(state.state == .processing || !state.canGenerateMinutes)
+                            .disabled([.recording, .paused, .processing].contains(state.state)
+                                      || !state.canGenerateMinutes)
                     } else {
                         iconButton("arrow.clockwise", loc.t(L.regenerate)) { state.reprocessSelected() }
-                            .disabled(state.state == .processing || !state.canStartTranscription)
+                            .disabled(reprocessDisabled)
                     }
                 }
             }
@@ -132,22 +143,27 @@ struct MeetingDetailView: View {
                 }
                 Text(state.status).font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 Button(loc.t(L.cancel)) { state.cancelProcessing() }.buttonStyle(GhostButton())
-            } else if hasTranscript && tab != .transcript {
+            } else if isOfflineMeeting && hasTranscript && tab != .transcript {
                 Image(systemName: "doc.text.magnifyingglass").font(.title).foregroundStyle(Theme.muted)
                 Text(loc.t(state.canGenerateMinutes ? L.notesSeparateStage : L.notesNeedProvider))
                     .font(Theme.ui(12)).foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
                 Button(loc.t(L.generateMinutes)) { state.generateMinutes(meeting.dir) }
                     .buttonStyle(MintButton())
-                    .disabled(!state.canGenerateMinutes)
+                    .disabled([.recording, .paused, .processing].contains(state.state)
+                              || !state.canGenerateMinutes)
             } else if state.usesOfflineTranscription {
                 Image(systemName: "waveform.badge.magnifyingglass").font(.title).foregroundStyle(Theme.muted)
                 Text(offlineJob?.lastError ?? "Local transcript is not ready.")
                     .font(Theme.ui(12)).foregroundStyle(Theme.muted)
                 if let job = offlineJob, [.pending, .paused, .canceled].contains(job.status) {
                     Button(loc.t(L.resume)) { state.resumeOffline(meeting) }.buttonStyle(MintButton())
+                        .disabled([.recording, .paused, .processing].contains(state.state)
+                                  || !state.canStartTranscription)
                 } else if offlineJob?.status == .failed {
                     Button(loc.t(L.retry)) { state.retryOffline(meeting) }.buttonStyle(MintButton())
+                        .disabled([.recording, .paused, .processing].contains(state.state)
+                                  || !state.canStartTranscription)
                 }
             } else if !state.hasKeys {
                 Image(systemName: "key").font(.title).foregroundStyle(Theme.amber)
@@ -189,8 +205,12 @@ struct MeetingDetailView: View {
                     Button(loc.t(L.cancel)) { state.cancelProcessing() }.buttonStyle(GhostButton())
                 case .pending, .paused, .canceled:
                     Button(loc.t(L.resume)) { state.resumeOffline(meeting) }.buttonStyle(GhostButton())
+                        .disabled([.recording, .paused, .processing].contains(state.state)
+                                  || !state.canStartTranscription)
                 case .failed:
                     Button(loc.t(L.retry)) { state.retryOffline(meeting) }.buttonStyle(GhostButton())
+                        .disabled([.recording, .paused, .processing].contains(state.state)
+                                  || !state.canStartTranscription)
                 case .completed:
                     Button(loc.t(L.retranscribe)) { showRetranscribeConfirmation = true }
                         .buttonStyle(GhostButton())

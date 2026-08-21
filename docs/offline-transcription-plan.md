@@ -496,11 +496,19 @@ v1 is done when the acceptance scenario passes reliably and:
   pinned `mlx-community/whisper-large-v3-mlx` revision into MeetGist's
   Application Support folder.
   Ordinary transcription uses only those local files.
-- Worker shutdown is cooperative. If MLX Whisper is inside native inference,
-  recording startup waits for that call to return and then discards the
-  uncommitted chunk. This is the simplest reliable way to guarantee that local
-  Whisper and recording never overlap without adding a supervisor or checkpoint
-  mechanism.
+- Worker shutdown first requests a cooperative stop. If MLX Whisper is still
+  inside native inference after a two-second grace period, the coordinator
+  force-stops the child process. Atomic part commits preserve every completed
+  chunk and the current uncommitted chunk is retried later, so recording is not
+  delayed by local inference.
+- Every entry point into local transcription rejects work while a recorder is
+  active. The existing cloud pipeline keeps its previous lifecycle behavior.
+- Apple On-Device Meeting Notes split long transcripts into context-safe chunks,
+  extract faithful facts in independent sessions, recursively condense those
+  facts, and only then generate the final Minutes/Summary in a fresh session.
+- Python and Swift validate the complete reusable-part contract, including each
+  segment, so a parseable but malformed part is reprocessed instead of poisoning
+  every retry.
 - Runtime install progress is stage-based (runtime, packages, model), rather
   than byte-accurate. Job progress and ETA remain based only on committed audio
   core seconds as specified above.

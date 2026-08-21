@@ -5,6 +5,14 @@ import XCTest
 final class OfflineJobTests: XCTestCase {
     private enum AppleTestError: Error { case failed }
 
+    private actor AppleCallRecorder {
+        private var values: [(instructions: String, prompt: String)] = []
+        func append(instructions: String, prompt: String) {
+            values.append((instructions, prompt))
+        }
+        func snapshot() -> [(instructions: String, prompt: String)] { values }
+    }
+
     private struct StubAppleGenerator: AppleFoundationModelsGenerating {
         let output: String
         func generate(instructions: String, prompt: String) async throws -> String { output }
@@ -13,6 +21,22 @@ final class OfflineJobTests: XCTestCase {
     private struct FailingAppleGenerator: AppleFoundationModelsGenerating {
         func generate(instructions: String, prompt: String) async throws -> String {
             throw AppleTestError.failed
+        }
+    }
+
+    private struct ChunkingAppleGenerator: AppleFoundationModelsGenerating {
+        let recorder: AppleCallRecorder
+        let finalOutput: String
+
+        func generate(instructions: String, prompt: String) async throws -> String {
+            await recorder.append(instructions: instructions, prompt: prompt)
+            if instructions.contains("Extract a compact, factual record") {
+                return "- [00:01] Me: retained fact"
+            }
+            if instructions.contains("Condense these partial meeting facts") {
+                return "- [00:01] Me: reduced retained fact"
+            }
+            return finalOutput
         }
     }
 
@@ -124,6 +148,47 @@ final class OfflineJobTests: XCTestCase {
         XCTAssertTrue(result.summary.contains("## Key Decisions"))
     }
 
+    func testAppleWriterChunksLongTranscriptBeforeFinalNotesRequest() async throws {
+        let raw = """
+        ---POLISHED---
+        # Meeting Minutes
+        - Retained fact
+        ---SUMMARY---
+        ## Key Decisions
+        - Retained fact
+        """
+        let recorder = AppleCallRecorder()
+        let writer = AppleFoundationModelsNotesWriter(
+            generator: ChunkingAppleGenerator(recorder: recorder, finalOutput: raw))
+        let longTranscript = (0..<200).map {
+            "[00:\(String(format: "%02d", $0 % 60))] Me: Important decision number \($0)."
+        }.joined(separator: "\n")
+
+        let result = try await writer.notes(transcript: longTranscript, progress: { _ in })
+        let calls = await recorder.snapshot()
+
+        XCTAssertGreaterThan(calls.count, 2)
+        XCTAssertTrue(calls.dropLast().contains {
+            $0.instructions.contains("Extract a compact, factual record")
+        })
+        XCTAssertTrue(calls.dropLast().allSatisfy {
+            $0.prompt.count <= AppleFoundationModelsNotesWriter.sourceChunkCharacters
+        })
+        XCTAssertLessThanOrEqual(try XCTUnwrap(calls.last).prompt.count,
+                                 AppleFoundationModelsNotesWriter.finalSourceCharacters)
+        XCTAssertTrue(result.polished.contains("Retained fact"))
+        XCTAssertTrue(result.summary.contains("Key Decisions"))
+    }
+
+    func testAppleContextSplitterBoundsOversizedLines() {
+        let text = String(repeating: "越", count: 25) + "\nshort line"
+        let chunks = AppleFoundationModelsNotesWriter.splitForContext(text, limit: 10)
+
+        XCTAssertEqual(chunks.joined().filter { !$0.isWhitespace },
+                       text.filter { !$0.isWhitespace })
+        XCTAssertTrue(chunks.allSatisfy { $0.count <= 10 })
+    }
+
     func testAppleFailureLeavesExistingTranscriptUntouchedAndDoesNotFallback() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("meetgist-apple-notes-failure-\(UUID().uuidString)")
@@ -155,6 +220,10 @@ final class OfflineJobTests: XCTestCase {
         try Data("audio".utf8).write(to: session.appendingPathComponent("mic.m4a"))
         try Data("transcript".utf8).write(to: session.appendingPathComponent("transcript.md"))
 
+        let originalDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: originalDate],
+                                              ofItemAtPath: session.path)
+
         var meeting = try XCTUnwrap(MeetingStore.list(in: output).first)
         XCTAssertEqual(meeting.title, "Original")
         XCTAssertTrue(meeting.hasTranscript)
@@ -165,6 +234,8 @@ final class OfflineJobTests: XCTestCase {
         XCTAssertEqual(meeting.title, "Customer Review")
         XCTAssertEqual(meeting.dir, session)
         XCTAssertEqual(meeting.id, session.lastPathComponent)
+        XCTAssertEqual(try XCTUnwrap(meeting.date).timeIntervalSince1970,
+                       originalDate.timeIntervalSince1970, accuracy: 1)
 
         try Data("summary".utf8).write(to: session.appendingPathComponent("summary.md"))
         XCTAssertFalse(try XCTUnwrap(MeetingStore.list(in: output).first).hasNotes)
@@ -207,6 +278,37 @@ final class OfflineJobTests: XCTestCase {
         XCTAssertEqual(coordinator.state(for: session.lastPathComponent)?.status, .transcribing)
         await coordinator.cancel()
         XCTAssertEqual(coordinator.state(for: session.lastPathComponent)?.status, .canceled)
+    }
+
+    @MainActor
+    func testWorkerThatIgnoresTerminationIsForceStopped() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meetgist-offline-force-stop-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtimeRoot = root.appendingPathComponent("runtime")
+        let python = runtimeRoot.appendingPathComponent("python/bin/python3")
+        try FileManager.default.createDirectory(
+            at: python.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: runtimeRoot.appendingPathComponent("model"), withIntermediateDirectories: true)
+        try "#!/bin/sh\ntrap '' TERM INT\nwhile true; do sleep 1; done\n"
+            .write(to: python, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: python.path)
+        try Data().write(to: runtimeRoot.appendingPathComponent("model/weights.npz"))
+        try Data("{}".utf8).write(to: runtimeRoot.appendingPathComponent("ready.json"))
+        let session = root.appendingPathComponent("meeting")
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        let coordinator = OfflineJobCoordinator(runtime: OfflineRuntimeManager(root: runtimeRoot))
+        try await coordinator.start(sessionDir: session, config: OfflineJobConfig())
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        await coordinator.stopForRecording()
+
+        XCTAssertLessThan(started.duration(to: clock.now), .seconds(5))
+        XCTAssertNil(coordinator.activeSessionID)
+        XCTAssertEqual(coordinator.state(for: session.lastPathComponent)?.status, .pending)
     }
 
     @MainActor

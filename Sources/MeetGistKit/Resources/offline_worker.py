@@ -104,9 +104,20 @@ def valid_part(
     if any(part.get(key) != value for key, value in expected.items()):
         return False
     try:
+        processing_seconds = float(part["processing_seconds"])
+        segments = part.get("segments")
+        if not math.isfinite(processing_seconds) or processing_seconds < 0 or not isinstance(segments, list):
+            return False
+        for segment in segments:
+            if not isinstance(segment, dict) or not isinstance(segment.get("text"), str):
+                return False
+            start = float(segment["start_seconds"])
+            end = float(segment["end_seconds"])
+            if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end < start:
+                return False
         return math.isclose(float(part["core_start_seconds"]), chunk["core_start"], abs_tol=0.001) and math.isclose(
             float(part["core_end_seconds"]), chunk["core_end"], abs_tol=0.001
-        ) and isinstance(part.get("segments"), list)
+        )
     except (KeyError, TypeError, ValueError):
         return False
 
