@@ -74,8 +74,15 @@ public enum Exporter {
             guard let m = re.firstMatch(in: line, range: r) else { continue }
             func g(_ i: Int) -> String { guard let rr = Range(m.range(at: i), in: line) else { return "" }; return String(line[rr]) }
             let hasH = m.range(at: 3).location != NSNotFound
-            let start = hasH ? (Int(g(1)) ?? 0) * 3600 + (Int(g(2)) ?? 0) * 60 + (Int(g(3)) ?? 0)
-                             : (Int(g(1)) ?? 0) * 60 + (Int(g(2)) ?? 0)
+            let first = Int(g(1)) ?? 0
+            let second = Int(g(2)) ?? 0
+            let third = Int(g(3)) ?? 0
+            let start: Int
+            if hasH {
+                start = first * 3600 + second * 60 + third
+            } else {
+                start = first * 60 + second
+            }
             cues.append(Cue(start: start, speaker: g(4).trimmingCharacters(in: .whitespaces), text: g(5)))
         }
         var out = ""

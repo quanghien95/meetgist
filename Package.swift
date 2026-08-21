@@ -28,6 +28,10 @@ let package = Package(
             ],
             path: "app/Sources"
         ),
-        .testTarget(name: "MeetGistKitTests", dependencies: ["MeetGistKit"]),
+        .testTarget(
+            name: "MeetGistKitTests",
+            dependencies: ["MeetGistKit"],
+            path: "tests/MeetGistKitTests"
+        ),
     ]
 )
