@@ -12,6 +12,7 @@ Usage: postprocess.py <session_dir>
 import os
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,11 +23,19 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+# Homebrew's bin is absent from the minimal PATH that Shortcuts.app, launchd, and a
+# bare `python postprocess.py` hand us. transcribe_meeting.sh exports it, but this
+# module must not depend on being launched through the wrapper: without it, the
+# missing ffmpeg only surfaces after the audio upload has already been paid for.
+for _bin in ("/opt/homebrew/bin", "/usr/local/bin"):
+    if os.path.isdir(_bin) and _bin not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
+
 HERE = Path(__file__).resolve().parent
 ENV_FILE = HERE / ".env"
 load_dotenv(ENV_FILE)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
-GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-pro-latest")
 TRANSCRIPT_PROVIDER = os.getenv("TRANSCRIPT_PROVIDER", "auto").lower()
 OPENAI_TRANSCRIBE_MODEL = os.getenv(
     "OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"
@@ -764,6 +773,13 @@ def main(session_dir: str) -> None:
 
     if not mic_exists and not system_exists:
         raise SystemExit(f"no audio files found in {session} — need mic.m4a and/or system.m4a")
+
+    for _tool in ("ffmpeg", "ffprobe"):
+        if shutil.which(_tool) is None:
+            raise SystemExit(
+                f"{_tool} not on PATH (PATH={os.environ.get('PATH', '')}). "
+                "Install with `brew install ffmpeg`, or run via scripts/transcribe_meeting.sh."
+            )
 
     load_dotenv(ENV_FILE)
     api_key = os.getenv("GEMINI_API_KEY")

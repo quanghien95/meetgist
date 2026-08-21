@@ -4,6 +4,14 @@
 # Python environment & secrets
 scripts/.venv/
 scripts/.env
+# `scripts/.env` alone does NOT cover backups: a timestamped copy holding live API
+# keys showed up untracked on 2026-07-29. Ignore every .env variant EXCEPT the
+# committed template — hence the negation, which must stay after the wildcards.
+.env
+.env.*
+.env.bak*
+!scripts/.env.example
+!.env.example
 
 # Local run logs
 logs/
