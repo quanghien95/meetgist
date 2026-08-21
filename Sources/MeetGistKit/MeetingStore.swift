@@ -8,11 +8,14 @@ public struct Meeting: Identifiable, Sendable, Hashable {
     public let dir: URL
     public let date: Date?
     public let title: String
+    public let hasTranscript: Bool
     public let hasNotes: Bool
 }
 
 /// Lists and reads session folders under the output directory.
 public enum MeetingStore {
+    private static let titleFile = ".meeting-title"
+
     public static func list(in outputDir: URL) -> [Meeting] {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
@@ -27,12 +30,16 @@ public enum MeetingStore {
             else { continue }
             let hasAudio = fm.fileExists(atPath: url.appendingPathComponent("system.m4a").path)
                 || fm.fileExists(atPath: url.appendingPathComponent("mic.m4a").path)
-            let hasNotes = fm.fileExists(atPath: url.appendingPathComponent("transcript.md").path)
-            guard hasAudio || hasNotes else { continue }
+            let hasTranscript = fm.fileExists(atPath: url.appendingPathComponent("transcript.md").path)
+            let hasMinutes = fm.fileExists(atPath: url.appendingPathComponent("polished.md").path)
+            let hasSummary = fm.fileExists(atPath: url.appendingPathComponent("summary.md").path)
+            let hasNotes = hasMinutes && hasSummary
+            guard hasAudio || hasTranscript || hasMinutes || hasSummary else { continue }
             let date = try? url.resourceValues(forKeys: [.contentModificationDateKey])
                 .contentModificationDate
             out.append(Meeting(id: url.lastPathComponent, dir: url, date: date,
-                               title: prettyTitle(url.lastPathComponent), hasNotes: hasNotes))
+                               title: displayTitle(for: url), hasTranscript: hasTranscript,
+                               hasNotes: hasNotes))
         }
         return out.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
@@ -40,6 +47,26 @@ public enum MeetingStore {
     /// Read one of the markdown outputs (e.g. "transcript.md").
     public static func markdown(_ file: String, in dir: URL) -> String? {
         try? String(contentsOf: dir.appendingPathComponent(file), encoding: .utf8)
+    }
+
+    /// Changes only the displayed title. The session directory remains stable so
+    /// transcription checkpoints and IDs do not need migration.
+    public static func rename(_ meeting: Meeting, to rawTitle: String) throws {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            throw NSError(domain: "MeetGist.MeetingStore", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Meeting name cannot be empty."])
+        }
+        try (title + "\n").write(to: meeting.dir.appendingPathComponent(titleFile),
+                                  atomically: true, encoding: .utf8)
+    }
+
+    private static func displayTitle(for dir: URL) -> String {
+        if let saved = try? String(contentsOf: dir.appendingPathComponent(titleFile), encoding: .utf8) {
+            let title = saved.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty { return title }
+        }
+        return prettyTitle(dir.lastPathComponent)
     }
 
     /// Strip the `yyyy-MM-dd-HHmm-` prefix to a human-friendly title.

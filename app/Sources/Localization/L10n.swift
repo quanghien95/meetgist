@@ -63,8 +63,25 @@ enum L {
     static let done      = LStr(en: "Done", zh: "完成")
     static let cancel    = LStr(en: "Cancel", zh: "取消")
     static let retry     = LStr(en: "Retry", zh: "重试")
+    static let install   = LStr(en: "Install", zh: "安装")
+    static let remove    = LStr(en: "Remove", zh: "移除")
+    static let rename    = LStr(en: "Rename", zh: "重命名")
+    static let moveToTrash = LStr(en: "Move to Trash", zh: "移到废纸篓")
+    static let renameMeeting = LStr(en: "Rename Meeting", zh: "重命名会议")
+    static let deleteMeeting = LStr(en: "Delete Meeting?", zh: "删除会议？")
+    static let meetingName = LStr(en: "Meeting name", zh: "会议名称")
+    static let deleteMeetingWarning = LStr(
+        en: "The meeting folder and its audio will be moved to Trash.",
+        zh: "会议文件夹及其音频将被移到废纸篓。")
+    static let generateMinutes = LStr(en: "Generate Minutes", zh: "生成纪要")
+    static let regenerateMinutes = LStr(en: "Regenerate Minutes", zh: "重新生成纪要")
     static let export    = LStr(en: "Export", zh: "导出")
     static let regenerate = LStr(en: "Regenerate", zh: "重新生成")
+    static let retranscribe = LStr(en: "Re-transcribe", zh: "重新转录")
+    static let retranscribeConfirmation = LStr(en: "Re-transcribe this meeting?", zh: "重新转录此会议？")
+    static let retranscribeWarning = LStr(
+        en: "This clears the generated transcript and saved transcription progress. Original audio is kept.",
+        zh: "这会清除生成的转录文本和已保存的转录进度。原始音频会保留。")
     static let copy      = LStr(en: "Copy", zh: "复制")
     static let reveal    = LStr(en: "Reveal in Finder", zh: "在访达中显示")
     static let openApp   = LStr(en: "Open MeetGist", zh: "打开 MeetGist")
@@ -79,6 +96,9 @@ enum L {
     static let error      = LStr(en: "Error", zh: "出错")
     static let ready      = LStr(en: "Ready", zh: "就绪")
     static let transcribing = LStr(en: "Transcribing", zh: "转录中")
+    static let localTranscription = LStr(en: "Local transcription", zh: "本地转录")
+    static let chunk      = LStr(en: "Chunk", zh: "分块")
+    static let notInstalled = LStr(en: "Not Installed", zh: "未安装")
     static let summarizing  = LStr(en: "Summarizing", zh: "总结中")
     static let saved        = LStr(en: "Saved", zh: "已保存")
 
@@ -100,6 +120,12 @@ enum L {
     static let transcript   = LStr(en: "Transcript", zh: "转录")
     static let timeline     = LStr(en: "Timeline", zh: "时间线")
     static let audioTracks  = LStr(en: "Audio tracks", zh: "音轨")
+    static let notesSeparateStage = LStr(
+        en: "The transcript is ready. Minutes and Summary are generated separately using your selected Notes provider.",
+        zh: "转录已完成。纪要和摘要需要使用所选的笔记服务单独生成。")
+    static let notesNeedProvider = LStr(
+        en: "The transcript is ready. Select a Notes provider and add its API key in Settings to generate Minutes and Summary.",
+        zh: "转录已完成。请在设置中选择笔记服务并添加 API 密钥，以生成纪要和摘要。")
     static let me           = LStr(en: "Me", zh: "我")
     static let system       = LStr(en: "System", zh: "对方")
 

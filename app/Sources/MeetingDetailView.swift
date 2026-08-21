@@ -9,6 +9,7 @@ struct MeetingDetailView: View {
     @EnvironmentObject var loc: Localization
     let meeting: Meeting
     @State private var tab = Tab.summary
+    @State private var showRetranscribeConfirmation = false
 
     enum Tab: Hashable { case summary, minutes, transcript }
 
@@ -19,6 +20,12 @@ struct MeetingDetailView: View {
     private var processingThis: Bool { state.state == .processing && state.selectedID == meeting.id }
     private var hasMic: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("mic.m4a").path) }
     private var hasSystem: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("system.m4a").path) }
+    private var offlineJob: OfflineJobState? { state.offlineJob(for: meeting) }
+    private var hasTranscript: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("transcript.md").path) }
+    private var hasGeneratedNotes: Bool {
+        FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("polished.md").path)
+            && FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("summary.md").path)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,6 +41,18 @@ struct MeetingDetailView: View {
             }
         }
         .background(Theme.bg)
+        .confirmationDialog(
+            loc.t(L.retranscribeConfirmation),
+            isPresented: $showRetranscribeConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(loc.t(L.retranscribe), role: .destructive) {
+                state.retranscribeOffline(meeting)
+            }
+            Button(loc.t(L.cancel), role: .cancel) { }
+        } message: {
+            Text(loc.t(L.retranscribeWarning))
+        }
     }
 
     private var header: some View {
@@ -67,8 +86,16 @@ struct MeetingDetailView: View {
                     .menuStyle(.borderlessButton).fixedSize().help(loc.t(L.export))
                     iconButton("doc.on.doc", loc.t(L.copy)) { copy() }
                     iconButton("folder", loc.t(L.reveal)) { NSWorkspace.shared.open(meeting.dir) }
-                    iconButton("arrow.clockwise", loc.t(L.regenerate)) { state.reprocessSelected() }
-                        .disabled(state.state == .processing || !state.hasKeys)
+                    if hasTranscript {
+                        Button(loc.t(hasGeneratedNotes ? L.regenerateMinutes : L.generateMinutes)) {
+                            state.generateMinutes(meeting.dir)
+                        }
+                            .buttonStyle(GhostButton())
+                            .disabled(state.state == .processing || !state.canGenerateMinutes)
+                    } else {
+                        iconButton("arrow.clockwise", loc.t(L.regenerate)) { state.reprocessSelected() }
+                            .disabled(state.state == .processing || !state.canStartTranscription)
+                    }
                 }
             }
             HStack(spacing: 6) {
@@ -77,6 +104,7 @@ struct MeetingDetailView: View {
                 segTab(loc.t(L.transcript), .transcript)
                 Spacer()
             }
+            if let job = offlineJob { offlineProgress(job) }
         }
         .padding(16)
     }
@@ -104,6 +132,23 @@ struct MeetingDetailView: View {
                 }
                 Text(state.status).font(Theme.mono(11)).foregroundStyle(Theme.muted)
                 Button(loc.t(L.cancel)) { state.cancelProcessing() }.buttonStyle(GhostButton())
+            } else if hasTranscript && tab != .transcript {
+                Image(systemName: "doc.text.magnifyingglass").font(.title).foregroundStyle(Theme.muted)
+                Text(loc.t(state.canGenerateMinutes ? L.notesSeparateStage : L.notesNeedProvider))
+                    .font(Theme.ui(12)).foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.center)
+                Button(loc.t(L.generateMinutes)) { state.generateMinutes(meeting.dir) }
+                    .buttonStyle(MintButton())
+                    .disabled(!state.canGenerateMinutes)
+            } else if state.usesOfflineTranscription {
+                Image(systemName: "waveform.badge.magnifyingglass").font(.title).foregroundStyle(Theme.muted)
+                Text(offlineJob?.lastError ?? "Local transcript is not ready.")
+                    .font(Theme.ui(12)).foregroundStyle(Theme.muted)
+                if let job = offlineJob, [.pending, .paused, .canceled].contains(job.status) {
+                    Button(loc.t(L.resume)) { state.resumeOffline(meeting) }.buttonStyle(MintButton())
+                } else if offlineJob?.status == .failed {
+                    Button(loc.t(L.retry)) { state.retryOffline(meeting) }.buttonStyle(MintButton())
+                }
             } else if !state.hasKeys {
                 Image(systemName: "key").font(.title).foregroundStyle(Theme.amber)
                 Text(loc.t(L.needKey)).font(Theme.ui(12)).foregroundStyle(Theme.muted)
@@ -114,6 +159,73 @@ struct MeetingDetailView: View {
             }
         }
         .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+    }
+
+    private func offlineProgress(_ job: OfflineJobState) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text(loc.t(L.localTranscription)).font(Theme.mono(11, .medium)).foregroundStyle(Theme.text)
+                Spacer()
+                Text("\(Int(job.progress.fraction * 100))%")
+                    .font(Theme.mono(11)).foregroundStyle(Theme.muted)
+            }
+            ProgressView(value: job.progress.fraction).tint(Theme.mint)
+            if let currentTrack = job.progress.currentTrack,
+               let currentChunk = job.progress.currentChunk {
+                let track = currentTrack == "system" ? loc.t(L.system) : loc.t(L.microphone)
+                Text("\(track) · \(loc.t(L.chunk)) \(currentChunk + 1)")
+                    .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+            }
+            trackProgress(loc.t(L.system), key: "system", job: job)
+            trackProgress(loc.t(L.microphone), key: "mic", job: job)
+            HStack {
+                if let eta = job.progress.etaSeconds, job.status == .transcribing {
+                    Text("ETA  \(formatETA(eta))").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+                switch job.status {
+                case .transcribing:
+                    Button(loc.t(L.pause)) { state.pauseOffline() }.buttonStyle(GhostButton())
+                    Button(loc.t(L.cancel)) { state.cancelProcessing() }.buttonStyle(GhostButton())
+                case .pending, .paused, .canceled:
+                    Button(loc.t(L.resume)) { state.resumeOffline(meeting) }.buttonStyle(GhostButton())
+                case .failed:
+                    Button(loc.t(L.retry)) { state.retryOffline(meeting) }.buttonStyle(GhostButton())
+                case .completed:
+                    Button(loc.t(L.retranscribe)) { showRetranscribeConfirmation = true }
+                        .buttonStyle(GhostButton())
+                        .disabled(state.state == .processing)
+                }
+            }
+            if let error = job.lastError, !error.isEmpty {
+                Text(error).font(.caption).foregroundStyle(Theme.amber)
+            }
+            ForEach(job.warnings, id: \.self) { warning in
+                Text(warning).font(.caption).foregroundStyle(Theme.amber)
+            }
+        }
+        .padding(10)
+        .background(Theme.panel2)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func trackProgress(_ label: String, key: String, job: OfflineJobState) -> some View {
+        HStack {
+            Text(label).font(Theme.mono(10)).foregroundStyle(Theme.muted)
+            Spacer()
+            if let track = job.tracks[key] {
+                let processed = job.progress.trackProcessedSeconds[key] ?? 0
+                Text(processed >= track.durationSeconds - 0.01 ? "Completed" : "\(Int(min(1, processed / max(0.001, track.durationSeconds)) * 100))%")
+                    .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+            } else {
+                Text("Skipped").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+            }
+        }
+    }
+
+    private func formatETA(_ seconds: Int) -> String {
+        if seconds < 60 { return "< 1 min" }
+        return "\(Int(ceil(Double(seconds) / 60))) min"
     }
 
     private func iconButton(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {

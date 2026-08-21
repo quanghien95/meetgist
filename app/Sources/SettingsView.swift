@@ -124,29 +124,128 @@ struct ProviderSlot: View {
                 Picker("Provider", selection: $selection) {
                     ForEach(providers) { Text($0.name).tag($0.id) }
                 }
-                HStack {
-                    SecureField(state.hasKey(selected) ? "Key saved — paste to replace" : "API key", text: $keyInput)
-                    Button("Save") { state.saveKey(keyInput, for: selected); keyInput = "" }
-                        .disabled(keyInput.isEmpty)
-                }
-                HStack {
-                    TextField("Model (default \(defaultModel))", text: $modelInput)
-                    Button("Set") { state.setModel(modelInput, for: selected, slot: slot); modelInput = "" }
-                        .disabled(modelInput.isEmpty)
-                }
-                HStack(spacing: 6) {
-                    Image(systemName: state.hasKey(selected) ? "checkmark.seal.fill" : "exclamationmark.triangle")
-                        .foregroundStyle(state.hasKey(selected) ? .green : .orange)
-                    let override = state.modelOverride(selected, slot: slot)
-                    Text(state.hasKey(selected)
-                         ? "Key set · model: \(override.isEmpty ? defaultModel : override)"
-                         : "No key yet.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    if let help = selected.keyHelp, let u = URL(string: help) {
-                        Spacer(); Link("Get a key ↗", destination: u).font(.callout)
+                if selected.transcribeStyle == "offline" && slot == "transcribe" {
+                    OfflineProviderSettings()
+                } else if selected.notesStyle == "apple" && slot == "notes" {
+                    AppleOnDeviceProviderSettings()
+                } else {
+                    HStack {
+                        SecureField(state.hasKey(selected) ? "Key saved — paste to replace" : "API key", text: $keyInput)
+                        Button("Save") { state.saveKey(keyInput, for: selected); keyInput = "" }
+                            .disabled(keyInput.isEmpty)
+                    }
+                    HStack {
+                        TextField("Model (default \(defaultModel))", text: $modelInput)
+                        Button("Set") { state.setModel(modelInput, for: selected, slot: slot); modelInput = "" }
+                            .disabled(modelInput.isEmpty)
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: state.hasKey(selected) ? "checkmark.seal.fill" : "exclamationmark.triangle")
+                            .foregroundStyle(state.hasKey(selected) ? .green : .orange)
+                        let override = state.modelOverride(selected, slot: slot)
+                        Text(state.hasKey(selected)
+                             ? "Key set · model: \(override.isEmpty ? defaultModel : override)"
+                             : "No key yet.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if let help = selected.keyHelp, let u = URL(string: help) {
+                            Spacer(); Link("Get a key ↗", destination: u).font(.callout)
+                        }
                     }
                 }
             }.padding(6)
+        }
+    }
+}
+
+struct OfflineProviderSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("MLX Whisper · Large V3 · Apple Silicon").font(.callout)
+                Spacer()
+                runtimeAction
+            }
+            runtimeStatus
+            Text("Model download: approximately \(ByteCountFormatter.string(fromByteCount: OfflineRuntimeManager.modelDownloadBytes, countStyle: .decimal)). Python runtime and packages need additional space.")
+                .font(.caption).foregroundStyle(.secondary)
+            if state.offlineRuntime.state == .installing {
+                ProgressView(value: state.offlineRuntime.installProgress)
+            }
+            HStack {
+                Text("Language").frame(width: 100, alignment: .leading)
+                Picker("", selection: $state.offlineLanguage) {
+                    Text("Auto-detect").tag("auto")
+                    Text("English").tag("en")
+                    Text("Chinese").tag("zh")
+                    Text("Spanish").tag("es")
+                    Text("French").tag("fr")
+                    Text("German").tag("de")
+                    Text("Japanese").tag("ja")
+                    Text("Korean").tag("ko")
+                }.labelsHidden()
+            }
+            TextField("Optional technical vocabulary", text: $state.offlineVocabulary)
+            Text("Used as an initial transcription prompt. One local job and one five-minute chunk run at a time.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var runtimeAction: some View {
+        switch state.offlineRuntime.state {
+        case .notInstalled:
+            if OfflineRuntimeManager.isSupported {
+                Button(loc.t(L.install)) { state.installOfflineRuntime() }
+            }
+        case .installing:
+            EmptyView()
+        case .ready:
+            Button(loc.t(L.remove)) { state.removeOfflineRuntime() }
+        case .failed:
+            Button(loc.t(L.retry)) { state.installOfflineRuntime() }
+        }
+    }
+
+    @ViewBuilder private var runtimeStatus: some View {
+        switch state.offlineRuntime.state {
+        case .notInstalled:
+            if OfflineRuntimeManager.isSupported {
+                Label(loc.t(L.notInstalled), systemImage: "arrow.down.circle")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Label("Offline Local Whisper requires Apple Silicon.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(Theme.amber)
+            }
+        case .installing:
+            Label(state.offlineRuntime.installDetail, systemImage: "arrow.triangle.2.circlepath")
+                .font(.callout).foregroundStyle(.secondary)
+        case .ready:
+            Label(loc.t(L.ready), systemImage: "checkmark.seal.fill")
+                .font(.callout).foregroundStyle(.green)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout).foregroundStyle(Theme.amber)
+        }
+    }
+}
+
+struct AppleOnDeviceProviderSettings: View {
+    private var availability: AppleFoundationModelsAvailability {
+        AppleFoundationModelsSupport.availability
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: availability.isReady ? "checkmark.seal.fill" : "exclamationmark.triangle")
+                    .foregroundStyle(availability.isReady ? .green : Theme.amber)
+                Text(availability.message).font(.callout).foregroundStyle(.secondary)
+            }
+            Text("Apple Intelligence processes the transcript on-device. The system model is managed by macOS; MeetGist does not download a separate model.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

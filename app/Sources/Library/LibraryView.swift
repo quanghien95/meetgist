@@ -7,6 +7,11 @@ struct LibraryView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
     @State private var query = ""
+    @State private var meetingToRename: Meeting?
+    @State private var renameText = ""
+    @State private var meetingToDelete: Meeting?
+    @State private var showRename = false
+    @State private var showDelete = false
 
     private var filtered: [Meeting] {
         guard !query.isEmpty else { return state.meetings }
@@ -27,7 +32,22 @@ struct LibraryView: View {
 
                 List(selection: $state.selectedID) {
                     Section(loc.t(L.meetings)) {
-                        ForEach(filtered) { m in MeetingRow(meeting: m).tag(m.id) }
+                        ForEach(filtered) { meeting in
+                            MeetingRow(
+                                meeting: meeting,
+                                canManage: !isLive && state.state != .processing,
+                                onRename: {
+                                    meetingToRename = meeting
+                                    renameText = meeting.title
+                                    showRename = true
+                                },
+                                onDelete: {
+                                    meetingToDelete = meeting
+                                    showDelete = true
+                                }
+                            )
+                            .tag(meeting.id)
+                        }
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -74,6 +94,24 @@ struct LibraryView: View {
         .sheet(isPresented: $state.showSettings) {
             SettingsView().environmentObject(state).environmentObject(loc).preferredColorScheme(.dark)
         }
+        .alert(loc.t(L.renameMeeting), isPresented: $showRename) {
+            TextField(loc.t(L.meetingName), text: $renameText)
+            Button(loc.t(L.rename)) {
+                if let meetingToRename { state.renameMeeting(meetingToRename, to: renameText) }
+            }
+            .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button(loc.t(L.cancel), role: .cancel) { }
+        }
+        .confirmationDialog(
+            loc.t(L.deleteMeeting), isPresented: $showDelete, titleVisibility: .visible
+        ) {
+            Button(loc.t(L.moveToTrash), role: .destructive) {
+                if let meetingToDelete { state.moveMeetingToTrash(meetingToDelete) }
+            }
+            Button(loc.t(L.cancel), role: .cancel) { }
+        } message: {
+            Text(loc.t(L.deleteMeetingWarning))
+        }
         .onAppear { state.refresh() }
     }
 }
@@ -81,6 +119,9 @@ struct LibraryView: View {
 struct MeetingRow: View {
     @EnvironmentObject var loc: Localization
     let meeting: Meeting
+    let canManage: Bool
+    let onRename: () -> Void
+    let onDelete: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(meeting.title).font(Theme.ui(13)).foregroundStyle(Theme.text).lineLimit(1)
@@ -92,9 +133,20 @@ struct MeetingRow: View {
                 Spacer()
                 if meeting.hasNotes {
                     StatusPill(color: Theme.mint, text: loc.t(L.summary))
+                } else if meeting.hasTranscript {
+                    StatusPill(color: Theme.teal, text: loc.t(L.transcript))
                 } else {
                     StatusPill(color: Theme.muted, text: loc.t(L.saved))
                 }
+                Menu {
+                    Button(loc.t(L.rename), action: onRename)
+                    Button(loc.t(L.moveToTrash), role: .destructive, action: onDelete)
+                } label: {
+                    Image(systemName: "ellipsis").frame(width: 18, height: 18)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(!canManage)
             }
         }
         .padding(.vertical, 3)

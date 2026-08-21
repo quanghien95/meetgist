@@ -14,7 +14,11 @@ let package = Package(
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.2.0"),
     ],
     targets: [
-        .target(name: "MeetGistKit"),
+        .target(
+            name: "MeetGistKit",
+            resources: [.copy("Resources/offline_worker.py"),
+                        .copy("Resources/offline-requirements.lock")]
+        ),
         .executableTarget(name: "meetgist", dependencies: ["MeetGistKit"]),
         // SwiftUI app sources live in app/Sources and are the source of truth for
         // BOTH this SPM target (headless compile-check: `swift build`) and the real

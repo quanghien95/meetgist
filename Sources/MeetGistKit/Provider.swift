@@ -10,10 +10,10 @@ public struct Provider: Identifiable, Codable, Sendable, Hashable {
     public var id: String
     public var name: String
     public var baseURL: String
-    /// "gemini" (audio via Files API), "whisper" (OpenAI-compatible /audio/transcriptions), or nil.
+    /// "gemini", "whisper" (OpenAI-compatible), "offline" (bundled worker), or nil.
     public var transcribeStyle: String?
     public var transcribeModel: String?
-    /// "gemini" (generateContent) or "chat" (OpenAI-compatible /chat/completions), or nil.
+    /// "gemini", "chat" (OpenAI-compatible), "apple" (Foundation Models), or nil.
     public var notesStyle: String?
     public var notesModel: String?
     public var keyHelp: String?
@@ -54,6 +54,11 @@ public enum ProviderCatalog {
                  transcribeStyle: "whisper", transcribeModel: "whisper-large-v3-turbo",
                  notesStyle: "chat", notesModel: "llama-3.3-70b-versatile",
                  keyHelp: "https://console.groq.com/keys"),
+        Provider(id: "offline-whisper", name: "Offline / Local Whisper",
+                 baseURL: "", transcribeStyle: "offline",
+                 transcribeModel: "mlx-community/whisper-large-v3-mlx"),
+        Provider(id: "apple-foundation-models", name: "Apple On-Device",
+                 baseURL: "", notesStyle: "apple", notesModel: "System Language Model"),
         Provider(id: "deepseek", name: "DeepSeek (深度求索)",
                  baseURL: "https://api.deepseek.com/v1",
                  notesStyle: "chat", notesModel: "deepseek-v4-pro",

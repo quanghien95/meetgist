@@ -95,6 +95,17 @@ public enum Pipelines {
             throw PipelineError.unsupported("\(transcription.name) can't transcribe audio — pick a transcription provider.")
         }
 
+        let writer = try makeNotesWriter(notes: notes, notesKey: notesKey,
+                                         notesTemplate: notesTemplate)
+
+        return ComposedPipeline(providerName: "\(transcription.name) → \(notes.name)",
+                                transcriber: transcriber, notesWriter: writer)
+    }
+
+    /// Build only the transcript → minutes stage. Offline transcription uses this
+    /// later, without changing the existing composed cloud pipeline.
+    public static func makeNotesWriter(notes: Provider, notesKey: String?,
+                                       notesTemplate: String? = nil) throws -> any NotesWriter {
         let writer: NotesWriter
         switch notes.notesStyle {
         case "gemini":
@@ -108,12 +119,12 @@ public enum Pipelines {
                 throw PipelineError.unsupported("\(notes.name) needs a model name in Settings.")
             }
             writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model, template: notesTemplate)
+        case "apple":
+            writer = AppleFoundationModelsNotesWriter(template: notesTemplate)
         default:
             throw PipelineError.unsupported("\(notes.name) can't write notes.")
         }
-
-        return ComposedPipeline(providerName: "\(transcription.name) → \(notes.name)",
-                                transcriber: transcriber, notesWriter: writer)
+        return writer
     }
 }
 
