@@ -11,10 +11,10 @@ struct MeetingDetailView: View {
     @State private var tab = Tab.summary
     @State private var showRetranscribeConfirmation = false
 
-    enum Tab: Hashable { case summary, minutes, transcript }
+    enum Tab: Hashable { case summary, minutes, transcript, postProcess }
 
     private var file: String {
-        switch tab { case .summary: return "summary.md"; case .minutes: return "polished.md"; case .transcript: return "transcript.md" }
+        switch tab { case .summary: return "summary.md"; case .minutes: return "polished.md"; case .transcript: return "transcript.md"; case .postProcess: return PostProcessRunner.outputFile }
     }
     private var content: String? { MeetingStore.markdown(file, in: meeting.dir) }
     private var processingThis: Bool { state.state == .processing && state.selectedID == meeting.id }
@@ -107,12 +107,18 @@ struct MeetingDetailView: View {
                         iconButton("arrow.clockwise", loc.t(L.regenerate)) { state.reprocessSelected() }
                             .disabled(reprocessDisabled)
                     }
+                    Button("Run script") { state.runPostProcess(meeting) }
+                        .buttonStyle(GhostButton())
+                        .disabled(state.state == .processing || state.postProcessSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             HStack(spacing: 6) {
                 segTab(loc.t(L.summary), .summary)
                 segTab(loc.t(L.minutes), .minutes)
                 segTab(loc.t(L.transcript), .transcript)
+                if state.postProcessEnabled || FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent(PostProcessRunner.outputFile).path) {
+                    segTab("Post-process", .postProcess)
+                }
                 Spacer()
             }
             if let job = offlineJob { offlineProgress(job) }

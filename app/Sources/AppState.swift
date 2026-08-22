@@ -31,6 +31,9 @@ final class AppState: ObservableObject {
     @Published var outputDir: URL { didSet { persistOutput(); refresh(); offlineCoordinator.scan(outputDir: outputDir) } }
     @Published var presence: Presence { didSet { UserDefaults.standard.set(presence.rawValue, forKey: Keys.presence) } }
     @Published var autoTranscribe: Bool { didSet { UserDefaults.standard.set(autoTranscribe, forKey: Keys.auto) } }
+    @Published var detectMeetings: Bool { didSet { UserDefaults.standard.set(detectMeetings, forKey: Keys.detectMeetings) } }
+    @Published var postProcessEnabled: Bool { didSet { UserDefaults.standard.set(postProcessEnabled, forKey: Keys.postProcessEnabled) } }
+    @Published var postProcessSource: String { didSet { UserDefaults.standard.set(postProcessSource, forKey: Keys.postProcessSource) } }
     @Published var useTemplate: Bool { didSet { UserDefaults.standard.set(useTemplate, forKey: Keys.useTemplate) } }
     @Published var notesTemplate: String { didSet { UserDefaults.standard.set(notesTemplate, forKey: Keys.template) } }
     @Published var transcriptionProviderID: String { didSet { UserDefaults.standard.set(transcriptionProviderID, forKey: Keys.transcribe); refreshKeyFlag() } }
@@ -48,7 +51,11 @@ final class AppState: ObservableObject {
     /// Set by the app so AppState can flash the HUD on transitions.
     var hud: ((HUDEvent) -> Void)?
     private var mini: MiniController?
+    private var meetingDetector: MeetingDetector?
+    private let meetingPrompt = MeetingDetectedController()
     func installMiniController(loc: Localization) { if mini == nil { mini = MiniController(state: self, loc: loc) } }
+    func installMeetingDetector() { if meetingDetector == nil { meetingDetector = MeetingDetector(state: self) } }
+    func presentMeetingDetected(title: String) { meetingPrompt.present(state: self, title: title) }
 
     @Published var processStep = 0   // 0 = transcribing, 1 = summarizing
     private var processTask: Task<Void, Never>?
@@ -64,6 +71,7 @@ final class AppState: ObservableObject {
         static let transcribe = "MeetGistTranscribeProvider", notes = "MeetGistNotesProvider", custom = "MeetGistCustomProviders"
         static let useTemplate = "MeetGistUseTemplate", template = "MeetGistTemplate"
         static let offlineLanguage = "MeetGistOfflineLanguage", offlineVocabulary = "MeetGistOfflineVocabulary"
+        static let detectMeetings = "MeetGistDetectMeetings", postProcessEnabled = "MeetGistPostProcessEnabled", postProcessSource = "MeetGistPostProcessSource"
     }
 
     init() {
@@ -72,6 +80,9 @@ final class AppState: ObservableObject {
         else { outputDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents/meetgist") }
         presence = Presence(rawValue: d.string(forKey: Keys.presence) ?? "menuBar") ?? .menuBar
         autoTranscribe = (d.object(forKey: Keys.auto) as? Bool) ?? true
+        detectMeetings = (d.object(forKey: Keys.detectMeetings) as? Bool) ?? true
+        postProcessEnabled = (d.object(forKey: Keys.postProcessEnabled) as? Bool) ?? false
+        postProcessSource = d.string(forKey: Keys.postProcessSource) ?? "import os\n\n# Available values are in MEETGIST_* environment variables.\nprint(f\"Processed: {os.environ['MEETGIST_MEETING_TITLE']}\")\n"
         useTemplate = (d.object(forKey: Keys.useTemplate) as? Bool) ?? false
         notesTemplate = d.string(forKey: Keys.template) ?? ""
         transcriptionProviderID = d.string(forKey: Keys.transcribe) ?? "gemini"
@@ -247,7 +258,9 @@ final class AppState: ObservableObject {
                     }
                 }
                 try Task.checkCancellation()
-                self.state = .idle; self.status = "Notes ready."; self.refresh()
+                self.refresh()
+                try await self.runPostProcessIfEnabled(for: dir)
+                self.state = .idle; self.status = "Notes ready."
                 self.hud?(HUDEvent(kind: .done, text: "Done"))
             } catch is CancellationError {
                 self.state = .idle; self.status = "Canceled."
@@ -295,8 +308,18 @@ final class AppState: ObservableObject {
                 let job = self.offlineCoordinator.state(for: dir.lastPathComponent)
                 switch job?.status {
                 case .completed:
-                    self.state = .idle; self.status = "Transcript ready."
-                    self.refresh(); self.hud?(HUDEvent(kind: .done, text: "Done"))
+                    guard self.canGenerateMinutes else {
+                        self.state = .idle; self.status = "Transcript ready. Add a Notes provider to generate minutes."
+                        self.refresh(); return
+                    }
+                    self.processStep = 1; self.status = "Writing minutes & summary…"
+                    self.localNotesTaskActive = self.usesLocalNotes
+                    try await self.generateMinutesStage(dir)
+                    self.localNotesTaskActive = false
+                    self.refresh()
+                    try await self.runPostProcessIfEnabled(for: dir)
+                    self.state = .idle; self.status = "Notes ready."
+                    self.hud?(HUDEvent(kind: .done, text: "Done"))
                 case .paused: self.state = .idle; self.status = "Local transcription paused."
                 case .canceled: self.state = .idle; self.status = "Local transcription canceled."
                 case .failed:
@@ -304,8 +327,10 @@ final class AppState: ObservableObject {
                 default: self.state = .idle; self.status = "Local transcription ready to resume."
                 }
             } catch is CancellationError {
+                self.localNotesTaskActive = false
                 // Recording startup owns the visible state after it requests stop.
             } catch {
+                self.localNotesTaskActive = false
                 self.state = .error; self.lastError = error.localizedDescription
                 self.status = "Local transcription failed"
             }
@@ -362,21 +387,53 @@ final class AppState: ObservableObject {
             guard let self else { return }
             defer { self.localNotesTaskActive = false }
             do {
-                let provider = self.effective(self.notesProvider)
-                let template = (self.useTemplate && !self.notesTemplate.isEmpty) ? self.notesTemplate : nil
-                _ = try await MeetingProcessor.generateNotes(
-                    sessionDir: dir, notesProvider: provider, notesKey: self.key(for: provider),
-                    notesTemplate: template) { message in
-                        Task { @MainActor in self.status = message }
-                    }
+                try await self.generateMinutesStage(dir)
                 try Task.checkCancellation()
-                self.state = .idle; self.status = "Minutes ready."; self.refresh()
+                self.refresh()
+                try await self.runPostProcessIfEnabled(for: dir)
+                self.state = .idle; self.status = "Minutes ready."
             } catch is CancellationError {
                 self.state = .idle; self.status = "Canceled."
             } catch {
                 self.state = .error; self.lastError = error.localizedDescription; self.status = "Minutes failed"
             }
         }
+    }
+
+    private func generateMinutesStage(_ dir: URL) async throws {
+        let provider = effective(notesProvider)
+        let template = (useTemplate && !notesTemplate.isEmpty) ? notesTemplate : nil
+        _ = try await MeetingProcessor.generateNotes(
+            sessionDir: dir, notesProvider: provider, notesKey: key(for: provider), notesTemplate: template
+        ) { [weak self] message in
+            Task { @MainActor in self?.status = message }
+        }
+    }
+
+    func runPostProcess(_ meeting: Meeting) {
+        guard state != .processing else { status = "Wait for processing to finish."; return }
+        guard !postProcessSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            status = "Add Python code in Settings first."; return
+        }
+        state = .processing; status = "Running post-process script…"
+        processTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let source = self.postProcessSource
+                _ = try await Task.detached { try PostProcessRunner.run(source: source, meeting: meeting) }.value
+                self.refresh(); self.state = .idle; self.status = "Post-process script finished."
+            } catch { self.state = .error; self.lastError = error.localizedDescription; self.status = "Post-process script failed." }
+        }
+    }
+
+    private func runPostProcessIfEnabled(for dir: URL) async throws {
+        guard postProcessEnabled, !postProcessSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        refresh()
+        guard let meeting = meetings.first(where: { $0.dir == dir }) else { return }
+        status = "Running post-process script…"
+        let source = postProcessSource
+        _ = try await Task.detached { try PostProcessRunner.run(source: source, meeting: meeting) }.value
+        refresh()
     }
 
     func installOfflineRuntime() { Task { await offlineRuntime.install(); refreshKeyFlag() } }

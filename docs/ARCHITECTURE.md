@@ -57,6 +57,19 @@ The composed cloud pipeline remains intact for existing cloud behavior. Local
 workers are explicit selections and must never silently fall back to cloud.
 Local Whisper does not generate notes; Local Qwen does not transcribe audio.
 
+With automatic transcription enabled, cloud and Offline MLX Whisper follow the
+same user-visible completion sequence: transcript, then the selected notes
+provider writes `polished.md` and `summary.md`. If post-processing is enabled,
+its local Python source runs only after both notes outputs exist; captured
+stdout/stderr is stored as `postprocess-output.md` in the meeting directory.
+
+## Meeting detection
+
+The app observes only the frontmost application and visible window title to
+offer a best-effort floating “Record now” prompt for Google Meet and Microsoft
+Teams. It does not read browser history, meeting content, or send detection
+data off device. The setting can disable this behavior.
+
 ## Critical flows
 
 ### Recording

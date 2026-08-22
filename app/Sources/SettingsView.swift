@@ -65,6 +65,7 @@ struct SettingsView: View {
                                 Button("Change…") { chooseFolder() }
                             }
                             Toggle(loc.t(L.autoTranscribe), isOn: $state.autoTranscribe)
+                            Toggle("Detect Google Meet and Microsoft Teams", isOn: $state.detectMeetings)
                             LaunchAtLoginToggle().environmentObject(loc)
                         }.padding(6)
                     }
@@ -83,6 +84,20 @@ struct SettingsView: View {
                     }
 
                     TemplateSettings().environmentObject(state).environmentObject(loc)
+
+                    GroupBox("Post-process script") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Toggle("Run automatically after Minutes are ready", isOn: $state.postProcessEnabled)
+                            Text("Python runs locally with meeting values exposed as environment variables. Its stdout and stderr are saved with the meeting.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            TextEditor(text: $state.postProcessSource)
+                                .font(Theme.mono(11))
+                                .frame(height: 150)
+                                .border(Theme.line)
+                            Text("MEETGIST_RECORDING_PATH · MEETGIST_MICROPHONE_PATH · MEETGIST_TRANSCRIPT · MEETGIST_MINUTES · MEETGIST_SUMMARY · MEETGIST_MEETING_TITLE · MEETGIST_MEETING_DATE · MEETGIST_MEETING_DIR · MEETGIST_MEETING_ID")
+                                .font(Theme.mono(9)).foregroundStyle(Theme.muted)
+                        }.padding(6)
+                    }
 
                     GroupBox(loc.t(L.privacy)) {
                         Text(loc.t(L.privacyStatement)).font(.callout).foregroundStyle(.secondary).padding(6)
