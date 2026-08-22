@@ -44,6 +44,10 @@ def token_count(text: str, tokenizer) -> int:
     return len(tokenizer.encode(text, add_special_tokens=False))
 
 
+def seconds_from_throughput(tokens: int, tokens_per_second: float) -> float:
+    return tokens / tokens_per_second if tokens_per_second > 0 else 0.0
+
+
 def split_for_context(text: str, tokenizer, limit: int) -> list[str]:
     """Prefer transcript lines, while bounding malformed oversized lines."""
     if not text.strip():
@@ -141,12 +145,16 @@ class MLXGenerator:
         from mlx_lm import load, stream_generate
         from mlx_lm.sample_utils import make_sampler
 
+        model_load_started = time.perf_counter()
         self.model, self.tokenizer = load(model_path)
+        self.model_load_seconds = time.perf_counter() - model_load_started
         self._stream_generate = stream_generate
         self._sampler = make_sampler(temp=0.7, top_p=0.8, top_k=20, min_p=0.0)
         self.peak_memory_gb = 0.0
         self.prompt_tokens = 0
         self.generation_tokens = 0
+        self.prefill_seconds = 0.0
+        self.generation_seconds = 0.0
 
     def __call__(self, instructions: str, source: str, max_tokens: int) -> str:
         prompt = self.tokenizer.apply_chat_template(
@@ -174,6 +182,15 @@ class MLXGenerator:
             self.peak_memory_gb = max(self.peak_memory_gb, float(last.peak_memory))
             self.prompt_tokens += int(last.prompt_tokens)
             self.generation_tokens += int(last.generation_tokens)
+            # MLX-LM measures prefill until the first generated token, then
+            # starts a new timer for decoding. Recover each duration from those
+            # public metrics so map/reduce calls can be accumulated faithfully.
+            self.prefill_seconds += seconds_from_throughput(
+                int(last.prompt_tokens), float(last.prompt_tps)
+            )
+            self.generation_seconds += seconds_from_throughput(
+                int(last.generation_tokens), float(last.generation_tps)
+            )
         return "".join(pieces).strip()
 
 
@@ -201,12 +218,21 @@ def run(request_path: Path, output_path: Path, model_path: str) -> None:
     emit_progress("Writing Meeting Minutes & Summary with Qwen…")
     raw = generator(instructions + "\n" + LANGUAGE_RULE, source, FINAL_OUTPUT_TOKENS)
     polished, summary = split_output(raw, is_template)
+    generation_tokens_per_second = (
+        generator.generation_tokens / generator.generation_seconds
+        if generator.generation_seconds > 0
+        else 0.0
+    )
 
     result = {
         "polished": polished,
         "summary": summary,
         "metrics": {
             "elapsedSeconds": time.perf_counter() - started,
+            "modelLoadSeconds": generator.model_load_seconds,
+            "prefillSeconds": generator.prefill_seconds,
+            "generationSeconds": generator.generation_seconds,
+            "generationTokensPerSecond": generation_tokens_per_second,
             "peakMemoryGB": generator.peak_memory_gb,
             "promptTokens": generator.prompt_tokens,
             "generationTokens": generator.generation_tokens,
@@ -241,6 +267,8 @@ def self_test() -> None:
     assert count > 1
     assert len(source) <= FINAL_SOURCE_TOKENS
     assert len(calls) > 1
+    assert seconds_from_throughput(120, 40) == 3
+    assert seconds_from_throughput(120, 0) == 0
     polished, summary = split_output(
         "---POLISHED---\n# Minutes\n---SUMMARY---\n## TL;DR", False
     )

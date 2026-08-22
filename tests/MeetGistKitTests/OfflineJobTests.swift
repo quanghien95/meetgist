@@ -174,7 +174,9 @@ final class OfflineJobTests: XCTestCase {
         let original = QwenNotesResponse(
             polished: "# Biên bản\n- An: Chốt phương án \"A/B\".",
             summary: "## Tóm tắt\n- Không gửi dữ liệu lên cloud.",
-            metrics: QwenNotesMetrics(elapsedSeconds: 12.5, peakMemoryGB: 6.2,
+            metrics: QwenNotesMetrics(elapsedSeconds: 12.5, modelLoadSeconds: 2.1,
+                                      prefillSeconds: 1.7, generationSeconds: 8.4,
+                                      generationTokensPerSecond: 57.1, peakMemoryGB: 6.2,
                                       promptTokens: 1_200, generationTokens: 480,
                                       sourceChunks: 3))
 
@@ -183,7 +185,26 @@ final class OfflineJobTests: XCTestCase {
 
         XCTAssertEqual(decoded.polished, original.polished)
         XCTAssertEqual(decoded.summary, original.summary)
+        XCTAssertEqual(decoded.metrics?.modelLoadSeconds, 2.1)
+        XCTAssertEqual(decoded.metrics?.prefillSeconds, 1.7)
+        XCTAssertEqual(decoded.metrics?.generationSeconds, 8.4)
+        XCTAssertEqual(decoded.metrics?.generationTokensPerSecond, 57.1)
         XCTAssertEqual(decoded.metrics?.sourceChunks, 3)
+    }
+
+    func testQwenMetricsDecodeThePreviousSchema() throws {
+        let legacy = """
+        {"elapsedSeconds":12.5,"peakMemoryGB":6.2,"promptTokens":1200,
+        "generationTokens":480,"sourceChunks":3}
+        """
+        let decoded = try JSONDecoder().decode(QwenNotesMetrics.self,
+                                                from: Data(legacy.utf8))
+
+        XCTAssertEqual(decoded.elapsedSeconds, 12.5)
+        XCTAssertNil(decoded.modelLoadSeconds)
+        XCTAssertNil(decoded.prefillSeconds)
+        XCTAssertNil(decoded.generationSeconds)
+        XCTAssertNil(decoded.generationTokensPerSecond)
     }
 
     func testQwenFailureDoesNotFallbackOrModifyTranscript() async throws {

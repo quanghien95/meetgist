@@ -10,10 +10,29 @@ struct QwenNotesRequest: Codable, Sendable {
 
 struct QwenNotesMetrics: Codable, Sendable {
     let elapsedSeconds: Double
+    let modelLoadSeconds: Double?
+    let prefillSeconds: Double?
+    let generationSeconds: Double?
+    let generationTokensPerSecond: Double?
     let peakMemoryGB: Double
     let promptTokens: Int
     let generationTokens: Int
     let sourceChunks: Int
+
+    init(elapsedSeconds: Double, modelLoadSeconds: Double? = nil,
+         prefillSeconds: Double? = nil, generationSeconds: Double? = nil,
+         generationTokensPerSecond: Double? = nil, peakMemoryGB: Double,
+         promptTokens: Int, generationTokens: Int, sourceChunks: Int) {
+        self.elapsedSeconds = elapsedSeconds
+        self.modelLoadSeconds = modelLoadSeconds
+        self.prefillSeconds = prefillSeconds
+        self.generationSeconds = generationSeconds
+        self.generationTokensPerSecond = generationTokensPerSecond
+        self.peakMemoryGB = peakMemoryGB
+        self.promptTokens = promptTokens
+        self.generationTokens = generationTokens
+        self.sourceChunks = sourceChunks
+    }
 }
 
 struct QwenNotesResponse: Codable, Sendable {

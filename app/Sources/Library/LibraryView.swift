@@ -41,16 +41,14 @@ struct LibraryView: View {
                                     renameText = meeting.title
                                     showRename = true
                                 },
-                                onDelete: {
-                                    meetingToDelete = meeting
-                                    showDelete = true
-                                }
+                                onDelete: { requestDelete(meeting) }
                             )
                             .tag(meeting.id)
                         }
                     }
                 }
                 .scrollContentBackground(.hidden)
+                .onDeleteCommand { requestDeleteSelectedMeeting() }
             }
             .background(Theme.bg)
             .navigationSplitViewColumnWidth(min: 240, ideal: 280)
@@ -113,6 +111,19 @@ struct LibraryView: View {
             Text(loc.t(L.deleteMeetingWarning))
         }
         .onAppear { state.refresh() }
+    }
+
+    private func requestDelete(_ meeting: Meeting) {
+        meetingToDelete = meeting
+        showDelete = true
+    }
+
+    private func requestDeleteSelectedMeeting() {
+        guard !isLive, state.state != .processing,
+              let selectedID = state.selectedID,
+              let meeting = state.meetings.first(where: { $0.id == selectedID })
+        else { return }
+        requestDelete(meeting)
     }
 }
 

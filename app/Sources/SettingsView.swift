@@ -255,6 +255,15 @@ struct AppleOnDeviceProviderSettings: View {
 struct QwenLocalNotesProviderSettings: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
+    @State private var showLastRunMetrics = false
+
+    private var metricsURL: URL {
+        state.localNotesRuntime.root.appendingPathComponent("last-run-metrics.json")
+    }
+
+    private var lastRunMetrics: String? {
+        try? String(contentsOf: metricsURL, encoding: .utf8)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -271,6 +280,28 @@ struct QwenLocalNotesProviderSettings: View {
             }
             Text("Runs fully offline after setup. Long transcripts are summarized in local chunks, then reduced before final Meeting Minutes generation. No cloud fallback.")
                 .font(.caption).foregroundStyle(.secondary)
+            if lastRunMetrics != nil {
+                Button("Last run metrics…") { showLastRunMetrics = true }
+                    .controlSize(.small)
+            }
+        }
+        .sheet(isPresented: $showLastRunMetrics) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Local Qwen · Last run metrics").font(.headline)
+                ScrollView {
+                    Text(lastRunMetrics ?? "Metrics file is no longer available.")
+                        .font(Theme.mono(11))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack {
+                    Spacer()
+                    Button(loc.t(L.done)) { showLastRunMetrics = false }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding()
+            .frame(width: 500, height: 330)
         }
     }
 
