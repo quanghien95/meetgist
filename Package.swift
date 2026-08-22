@@ -17,7 +17,9 @@ let package = Package(
         .target(
             name: "MeetGistKit",
             resources: [.copy("Resources/offline_worker.py"),
-                        .copy("Resources/offline-requirements.lock")]
+                        .copy("Resources/offline-requirements.lock"),
+                        .copy("Resources/qwen_notes_worker.py"),
+                        .copy("Resources/qwen-notes-requirements.lock")]
         ),
         .executableTarget(name: "meetgist", dependencies: ["MeetGistKit"]),
         // SwiftUI app sources live in app/Sources and are the source of truth for

@@ -27,7 +27,7 @@ struct MeetingDetailView: View {
             return [.recording, .paused, .processing].contains(state.state)
                 || !state.canStartTranscription
         }
-        if state.notesProvider.notesStyle == "apple",
+        if state.usesLocalNotes,
            [.recording, .paused].contains(state.state) { return true }
         return state.state == .processing || !state.hasKeys
     }

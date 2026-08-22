@@ -128,6 +128,8 @@ struct ProviderSlot: View {
                     OfflineProviderSettings()
                 } else if selected.notesStyle == "apple" && slot == "notes" {
                     AppleOnDeviceProviderSettings()
+                } else if selected.notesStyle == "qwen-mlx" && slot == "notes" {
+                    QwenLocalNotesProviderSettings()
                 } else {
                     HStack {
                         SecureField(state.hasKey(selected) ? "Key saved — paste to replace" : "API key", text: $keyInput)
@@ -246,6 +248,68 @@ struct AppleOnDeviceProviderSettings: View {
             }
             Text("Apple Intelligence processes the transcript on-device. The system model is managed by macOS; MeetGist does not download a separate model.")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct QwenLocalNotesProviderSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Qwen3 8B · MLX-LM · 4-bit · Apple Silicon").font(.callout)
+                Spacer()
+                runtimeAction
+            }
+            runtimeStatus
+            Text("Model download: approximately \(ByteCountFormatter.string(fromByteCount: LocalNotesRuntimeManager.modelDownloadBytes, countStyle: .decimal)). Python runtime and packages need additional space.")
+                .font(.caption).foregroundStyle(.secondary)
+            if state.localNotesRuntime.state == .installing {
+                ProgressView(value: state.localNotesRuntime.installProgress)
+            }
+            Text("Runs fully offline after setup. Long transcripts are summarized in local chunks, then reduced before final Meeting Minutes generation. No cloud fallback.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var runtimeAction: some View {
+        switch state.localNotesRuntime.state {
+        case .notInstalled:
+            if LocalNotesRuntimeManager.isSupported {
+                Button(loc.t(L.install)) { state.installLocalNotesRuntime() }
+            }
+        case .installing:
+            EmptyView()
+        case .ready:
+            Button(loc.t(L.remove)) { state.removeLocalNotesRuntime() }
+        case .failed:
+            Button(loc.t(L.retry)) { state.installLocalNotesRuntime() }
+        }
+    }
+
+    @ViewBuilder private var runtimeStatus: some View {
+        switch state.localNotesRuntime.state {
+        case .notInstalled:
+            if LocalNotesRuntimeManager.isSupported {
+                Label(loc.t(L.notInstalled), systemImage: "arrow.down.circle")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Label("Local Qwen Notes requires Apple Silicon.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(Theme.amber)
+            }
+        case .installing:
+            Label(state.localNotesRuntime.installDetail,
+                  systemImage: "arrow.triangle.2.circlepath")
+                .font(.callout).foregroundStyle(.secondary)
+        case .ready:
+            Label(loc.t(L.ready), systemImage: "checkmark.seal.fill")
+                .font(.callout).foregroundStyle(.green)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout).foregroundStyle(Theme.amber)
         }
     }
 }

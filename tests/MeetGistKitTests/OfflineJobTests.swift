@@ -4,6 +4,7 @@ import XCTest
 
 final class OfflineJobTests: XCTestCase {
     private enum AppleTestError: Error { case failed }
+    private enum QwenTestError: Error { case failed }
 
     private actor AppleCallRecorder {
         private var values: [(instructions: String, prompt: String)] = []
@@ -47,6 +48,27 @@ final class OfflineJobTests: XCTestCase {
             -> (polished: String, summary: String) {
             progress("Writing test notes")
             return ("polished: \(transcript)", "summary: \(transcript)")
+        }
+    }
+
+    private actor QwenRequestRecorder {
+        private var request: QwenNotesRequest?
+        func set(_ request: QwenNotesRequest) { self.request = request }
+        func snapshot() -> QwenNotesRequest? { request }
+    }
+
+    private struct StubQwenGenerator: QwenMLXGenerating {
+        let recorder: QwenRequestRecorder
+        let response: QwenNotesResponse
+        func generate(_ request: QwenNotesRequest) async throws -> QwenNotesResponse {
+            await recorder.set(request)
+            return response
+        }
+    }
+
+    private struct FailingQwenGenerator: QwenMLXGenerating {
+        func generate(_ request: QwenNotesRequest) async throws -> QwenNotesResponse {
+            throw QwenTestError.failed
         }
     }
 
@@ -101,6 +123,113 @@ final class OfflineJobTests: XCTestCase {
         XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "gemini" }?.notesStyle, "gemini")
         XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "openai" }?.notesStyle, "chat")
         XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "groq" }?.notesStyle, "chat")
+    }
+
+    func testQwenProviderIsNotesOnlyAndCloudProvidersStayUnchanged() throws {
+        let qwen = try XCTUnwrap(ProviderCatalog.builtIn.first { $0.id == "qwen-mlx-local" })
+        XCTAssertEqual(qwen.notesStyle, "qwen-mlx")
+        XCTAssertEqual(qwen.notesModel, "mlx-community/Qwen3-8B-4bit")
+        XCTAssertNil(qwen.transcribeStyle)
+        XCTAssertEqual(try Pipelines.makeNotesWriter(notes: qwen, notesKey: nil).label,
+                       "Qwen3-8B-4bit · MLX-LM")
+
+        XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "gemini" }?.notesStyle, "gemini")
+        XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "openai" }?.notesStyle, "chat")
+        XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "groq" }?.notesStyle, "chat")
+    }
+
+    func testExistingCloudNotesStillRequireKeysAndUseTheirConfiguredModels() throws {
+        for id in ["gemini", "openai", "groq"] {
+            let provider = try XCTUnwrap(ProviderCatalog.builtIn.first { $0.id == id })
+            XCTAssertThrowsError(try Pipelines.makeNotesWriter(notes: provider, notesKey: nil))
+            let writer = try Pipelines.makeNotesWriter(notes: provider, notesKey: "test-key")
+            let model = try XCTUnwrap(provider.notesModel)
+            XCTAssertEqual(writer.label, model)
+        }
+    }
+
+    func testQwenWriterUsesExistingOutputContractAndTemplateMode() async throws {
+        let recorder = QwenRequestRecorder()
+        let response = QwenNotesResponse(
+            polished: "# Biên bản\n- Quyết định",
+            summary: "## Tóm tắt\n- Quyết định",
+            metrics: nil)
+        let writer = QwenMLXNotesWriter(
+            template: "# Mẫu",
+            generator: StubQwenGenerator(recorder: recorder, response: response))
+
+        let result = try await writer.notes(
+            transcript: "[00:01] An: Chốt phương án.", progress: { _ in })
+        let recordedRequest = await recorder.snapshot()
+        let request = try XCTUnwrap(recordedRequest)
+
+        XCTAssertEqual(result.polished, response.polished)
+        XCTAssertEqual(result.summary, response.summary)
+        XCTAssertTrue(request.isTemplate)
+        XCTAssertTrue(request.instructions.contains("# Mẫu"))
+        XCTAssertEqual(request.transcript, "[00:01] An: Chốt phương án.")
+    }
+
+    func testQwenResultJSONPreservesVietnameseAndMarkdown() throws {
+        let original = QwenNotesResponse(
+            polished: "# Biên bản\n- An: Chốt phương án \"A/B\".",
+            summary: "## Tóm tắt\n- Không gửi dữ liệu lên cloud.",
+            metrics: QwenNotesMetrics(elapsedSeconds: 12.5, peakMemoryGB: 6.2,
+                                      promptTokens: 1_200, generationTokens: 480,
+                                      sourceChunks: 3))
+
+        let decoded = try JSONDecoder().decode(
+            QwenNotesResponse.self, from: JSONEncoder().encode(original))
+
+        XCTAssertEqual(decoded.polished, original.polished)
+        XCTAssertEqual(decoded.summary, original.summary)
+        XCTAssertEqual(decoded.metrics?.sourceChunks, 3)
+    }
+
+    func testQwenFailureDoesNotFallbackOrModifyTranscript() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meetgist-qwen-notes-failure-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let original = "[00:01] Me: Keep this transcript unchanged."
+        try original.write(to: root.appendingPathComponent("transcript.md"),
+                           atomically: true, encoding: .utf8)
+        let writer = QwenMLXNotesWriter(generator: FailingQwenGenerator())
+
+        do {
+            _ = try await MeetingProcessor.generateNotes(
+                sessionDir: root, writer: writer, providerName: "Local Qwen",
+                progress: { _ in })
+            XCTFail("Expected the injected Qwen failure")
+        } catch QwenTestError.failed { }
+
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("transcript.md")), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("polished.md").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("summary.md").path))
+    }
+
+    @MainActor
+    func testLocalNotesRuntimeReadinessIsIndependentFromWhisperRuntime() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meetgist-qwen-runtime-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let python = root.appendingPathComponent("python/bin/python3")
+        try FileManager.default.createDirectory(at: python.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("model"),
+                                                withIntermediateDirectories: true)
+        try "#!/bin/sh\nexit 0\n".write(to: python, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: python.path)
+        try Data("{}".utf8).write(to: root.appendingPathComponent("model/config.json"))
+        try Data().write(to: root.appendingPathComponent("model/model.safetensors"))
+        try Data("{}".utf8).write(to: root.appendingPathComponent("ready.json"))
+
+        let runtime = LocalNotesRuntimeManager(root: root)
+        XCTAssertEqual(runtime.state, .ready)
+        XCTAssertTrue(LocalNotesRuntimeManager.isReady(at: root))
+        XCTAssertTrue(runtime.root.path.contains("meetgist-qwen-runtime"))
+        XCTAssertFalse(runtime.root.path.contains("OfflineWhisper"))
     }
 
     func testAppleAvailabilityReasonsAreUseful() {

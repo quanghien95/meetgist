@@ -13,7 +13,8 @@ public struct Provider: Identifiable, Codable, Sendable, Hashable {
     /// "gemini", "whisper" (OpenAI-compatible), "offline" (bundled worker), or nil.
     public var transcribeStyle: String?
     public var transcribeModel: String?
-    /// "gemini", "chat" (OpenAI-compatible), "apple" (Foundation Models), or nil.
+    /// "gemini", "chat" (OpenAI-compatible), "apple" (Foundation Models),
+    /// "qwen-mlx" (app-managed MLX-LM), or nil.
     public var notesStyle: String?
     public var notesModel: String?
     public var keyHelp: String?
@@ -59,6 +60,9 @@ public enum ProviderCatalog {
                  transcribeModel: "mlx-community/whisper-large-v3-mlx"),
         Provider(id: "apple-foundation-models", name: "Apple On-Device",
                  baseURL: "", notesStyle: "apple", notesModel: "System Language Model"),
+        Provider(id: "qwen-mlx-local", name: "Local Qwen 8B · MLX",
+                 baseURL: "", notesStyle: "qwen-mlx",
+                 notesModel: "mlx-community/Qwen3-8B-4bit"),
         Provider(id: "deepseek", name: "DeepSeek (深度求索)",
                  baseURL: "https://api.deepseek.com/v1",
                  notesStyle: "chat", notesModel: "deepseek-v4-pro",

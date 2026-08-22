@@ -42,6 +42,7 @@ final class AppState: ObservableObject {
 
     lazy var offlineRuntime = OfflineRuntimeManager()
     lazy var offlineCoordinator = OfflineJobCoordinator(runtime: offlineRuntime)
+    lazy var localNotesRuntime = LocalNotesRuntimeManager()
     private var managerCancellables = Set<AnyCancellable>()
 
     /// Set by the app so AppState can flash the HUD on transitions.
@@ -85,6 +86,8 @@ final class AppState: ObservableObject {
             .store(in: &managerCancellables)
         offlineCoordinator.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
+        localNotesRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &managerCancellables)
         offlineCoordinator.scan(outputDir: outputDir)
     }
 
@@ -103,7 +106,8 @@ final class AppState: ObservableObject {
     }
     func key(for p: Provider) -> String? { Keychain.get(p.keyAccount) }
     func hasKey(_ p: Provider) -> Bool {
-        p.transcribeStyle == "offline" || p.notesStyle == "apple" || Keychain.get(p.keyAccount) != nil
+        p.transcribeStyle == "offline" || p.notesStyle == "apple"
+            || p.notesStyle == "qwen-mlx" || Keychain.get(p.keyAccount) != nil
     }
     func saveKey(_ k: String, for p: Provider) { Keychain.set(k.trimmingCharacters(in: .whitespacesAndNewlines), for: p.keyAccount); refreshKeyFlag() }
     func setModel(_ m: String, for p: Provider, slot: String) { UserDefaults.standard.set(m.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "model.\(p.id).\(slot)"); objectWillChange.send() }
@@ -112,19 +116,32 @@ final class AppState: ObservableObject {
     func updateCustom(_ p: Provider) { if let i = customProviders.firstIndex(where: { $0.id == p.id }) { customProviders[i] = p } }
     func removeCustom(_ p: Provider) { customProviders.removeAll { $0.id == p.id }; if transcriptionProviderID == p.id { transcriptionProviderID = "gemini" }; if notesProviderID == p.id { notesProviderID = "gemini" } }
     var usesOfflineTranscription: Bool { transcriptionProvider.transcribeStyle == "offline" }
+    var usesLocalNotes: Bool {
+        notesProvider.notesStyle == "apple" || notesProvider.notesStyle == "qwen-mlx"
+    }
     var canStartTranscription: Bool {
         usesOfflineTranscription ? offlineRuntime.state == .ready : hasKey(transcriptionProvider)
     }
     var canGenerateMinutes: Bool {
-        notesProvider.notesStyle == "apple"
-            ? AppleFoundationModelsSupport.availability.isReady
-            : hasKey(notesProvider)
+        switch notesProvider.notesStyle {
+        case "apple": return AppleFoundationModelsSupport.availability.isReady
+        case "qwen-mlx": return localNotesRuntime.state == .ready
+        default: return hasKey(notesProvider)
+        }
     }
     var offlineConfig: OfflineJobConfig {
         OfflineJobConfig(language: offlineLanguage, vocabulary: offlineVocabulary)
     }
     func offlineJob(for meeting: Meeting) -> OfflineJobState? { offlineCoordinator.state(for: meeting.id) }
     private func refreshKeyFlag() { hasKeys = canStartTranscription && canGenerateMinutes }
+    private var setupRequiredStatus: String {
+        if !canStartTranscription { return "Add an API key for the Transcription provider." }
+        switch notesProvider.notesStyle {
+        case "qwen-mlx": return "Install Local Qwen Notes in Settings."
+        case "apple": return AppleFoundationModelsSupport.availability.message
+        default: return "Add an API key for the Notes provider."
+        }
+    }
     private func saveCustom() { if let data = try? JSONEncoder().encode(customProviders) { UserDefaults.standard.set(data, forKey: Keys.custom) }; refreshKeyFlag() }
 
     // MARK: Meetings
@@ -194,26 +211,26 @@ final class AppState: ObservableObject {
         } else if hasKeys && autoTranscribe { process(dir) }
         else {
             state = .idle
-            status = hasKeys ? "Saved." : "Saved. Add an API key to generate notes."
+            status = hasKeys ? "Saved." : "Saved. \(setupRequiredStatus)"
         }
     }
 
     func process(_ dir: URL) {
         if usesOfflineTranscription { processOffline(dir); return }
-        if notesProvider.notesStyle == "apple", recorder != nil {
-            lastError = "Apple On-Device Notes cannot run while recording."
-            status = "Stop recording before using Apple On-Device Notes."
+        if usesLocalNotes, recorder != nil {
+            lastError = "Local Notes cannot run while recording."
+            status = "Stop recording before using Local Notes."
             return
         }
         processCloud(dir)
     }
 
     private func processCloud(_ dir: URL) {
-        guard hasKeys else { state = .idle; status = "Recorded. Add an API key in Settings."; return }
+        guard hasKeys else { state = .idle; status = "Recorded. \(setupRequiredStatus)"; return }
         processTask?.cancel()
         state = .processing; processStep = 0; status = "Transcribing…"
         hud?(HUDEvent(kind: .processing, text: "…"))
-        localNotesTaskActive = notesProvider.notesStyle == "apple"
+        localNotesTaskActive = usesLocalNotes
         processTask = Task { [weak self] in
             guard let self else { return }
             defer { self.localNotesTaskActive = false }
@@ -330,6 +347,9 @@ final class AppState: ObservableObject {
                 let availability = AppleFoundationModelsSupport.availability
                 lastError = availability.message
                 status = "Apple On-Device is unavailable."
+            } else if notesProvider.notesStyle == "qwen-mlx" {
+                lastError = "Install Qwen3 8B in Settings → AI Provider."
+                status = "Local Qwen Notes is not installed."
             } else {
                 status = "Add an API key for the Notes provider."
             }
@@ -337,7 +357,7 @@ final class AppState: ObservableObject {
         }
         processTask?.cancel()
         state = .processing; processStep = 1; status = "Writing minutes & summary…"
-        localNotesTaskActive = notesProvider.notesStyle == "apple"
+        localNotesTaskActive = usesLocalNotes
         processTask = Task { [weak self] in
             guard let self else { return }
             defer { self.localNotesTaskActive = false }
@@ -364,6 +384,17 @@ final class AppState: ObservableObject {
         Task {
             await offlineCoordinator.cancel()
             do { try offlineRuntime.remove(); refreshKeyFlag() }
+            catch { lastError = error.localizedDescription }
+        }
+    }
+    func installLocalNotesRuntime() {
+        Task { await localNotesRuntime.install(); refreshKeyFlag() }
+    }
+    func removeLocalNotesRuntime() {
+        processTask?.cancel()
+        Task {
+            await processTask?.value
+            do { try localNotesRuntime.remove(); refreshKeyFlag() }
             catch { lastError = error.localizedDescription }
         }
     }

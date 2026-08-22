@@ -1,0 +1,37 @@
+# Local Qwen Notes runtime v1. CPython is pinned by LocalNotesRuntimeManager.
+# Direct and transitive runtime dependencies are exact so installation does not
+# resolve moving package versions. Apple Silicon/macOS selects the MLX wheels.
+mlx-lm==0.31.3
+mlx==0.32.1
+mlx-metal==0.32.1
+numpy==2.4.6
+transformers==5.15.1
+tokenizers==0.22.2
+sentencepiece==0.2.2
+protobuf==7.36.0
+PyYAML==6.0.3
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+huggingface-hub==1.28.0
+packaging==26.3
+regex==2026.7.19
+safetensors==0.8.0
+tqdm==4.70.0
+typer==0.27.1
+click==8.4.2
+filelock==3.32.3
+fsspec==2026.7.0
+hf-xet==1.6.0
+httpx==0.28.1
+httpcore==1.0.9
+h11==0.16.0
+anyio==4.14.2
+certifi==2026.7.22
+idna==3.19
+typing-extensions==4.16.0
+shellingham==1.5.4
+rich==15.0.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+Pygments==2.21.0
+annotated-doc==0.0.5

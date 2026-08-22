@@ -121,6 +121,8 @@ public enum Pipelines {
             writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model, template: notesTemplate)
         case "apple":
             writer = AppleFoundationModelsNotesWriter(template: notesTemplate)
+        case "qwen-mlx":
+            writer = QwenMLXNotesWriter(template: notesTemplate)
         default:
             throw PipelineError.unsupported("\(notes.name) can't write notes.")
         }
