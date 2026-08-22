@@ -26,9 +26,14 @@ final class MeetingDetector {
     deinit { observers.forEach { center.removeObserver($0) }; timer?.cancel() }
 
     private func check() {
-        guard let state, state.detectMeetings, state.state == .idle,
-              let app = NSWorkspace.shared.frontmostApplication,
-              let fingerprint = matchingMeeting(app) else { return }
+        guard let state, state.detectMeetings, state.state == .idle else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let fingerprint = matchingMeeting(app) else {
+            // A subsequent Google Meet/Teams call must be able to prompt again.
+            // Keep the fingerprint only while its matching window is foreground.
+            lastFingerprint = nil
+            return
+        }
         guard fingerprint != lastFingerprint else { return }
         lastFingerprint = fingerprint
         state.presentMeetingDetected(title: fingerprint)
