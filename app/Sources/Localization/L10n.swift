@@ -143,6 +143,8 @@ enum L {
     static let presenceMini = LStr(en: "Mini floating controller", zh: "迷你浮窗")
     static let autoTranscribe = LStr(en: "Transcribe automatically after recording",
                                      zh: "录制结束后自动转录")
+    static let autoGenerateNotes = LStr(en: "Generate Minutes & Summary automatically after transcription",
+                                        zh: "转录完成后自动生成纪要和摘要")
     static let launchAtLogin = LStr(en: "Launch at login", zh: "登录时启动")
     static let microphone = LStr(en: "Microphone", zh: "麦克风")
     static let screenRecording = LStr(en: "Screen Recording (system audio)", zh: "屏幕录制（系统声音）")

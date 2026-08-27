@@ -32,6 +32,7 @@ final class AppState: ObservableObject {
     @Published var presence: Presence { didSet { UserDefaults.standard.set(presence.rawValue, forKey: Keys.presence) } }
     @Published var autoTranscribe: Bool { didSet { UserDefaults.standard.set(autoTranscribe, forKey: Keys.auto) } }
     @Published var detectMeetings: Bool { didSet { UserDefaults.standard.set(detectMeetings, forKey: Keys.detectMeetings) } }
+    @Published var autoGenerateNotes: Bool { didSet { UserDefaults.standard.set(autoGenerateNotes, forKey: Keys.autoGenerateNotes) } }
     @Published var postProcessEnabled: Bool { didSet { UserDefaults.standard.set(postProcessEnabled, forKey: Keys.postProcessEnabled) } }
     @Published var postProcessSource: String { didSet { UserDefaults.standard.set(postProcessSource, forKey: Keys.postProcessSource) } }
     @Published var useTemplate: Bool { didSet { UserDefaults.standard.set(useTemplate, forKey: Keys.useTemplate) } }
@@ -72,6 +73,7 @@ final class AppState: ObservableObject {
         static let useTemplate = "MeetGistUseTemplate", template = "MeetGistTemplate"
         static let offlineLanguage = "MeetGistOfflineLanguage", offlineVocabulary = "MeetGistOfflineVocabulary"
         static let detectMeetings = "MeetGistDetectMeetings", postProcessEnabled = "MeetGistPostProcessEnabled", postProcessSource = "MeetGistPostProcessSource"
+        static let autoGenerateNotes = "MeetGistAutoGenerateNotes"
     }
 
     init() {
@@ -81,6 +83,7 @@ final class AppState: ObservableObject {
         presence = Presence(rawValue: d.string(forKey: Keys.presence) ?? "menuBar") ?? .menuBar
         autoTranscribe = (d.object(forKey: Keys.auto) as? Bool) ?? true
         detectMeetings = (d.object(forKey: Keys.detectMeetings) as? Bool) ?? true
+        autoGenerateNotes = (d.object(forKey: Keys.autoGenerateNotes) as? Bool) ?? true
         postProcessEnabled = (d.object(forKey: Keys.postProcessEnabled) as? Bool) ?? false
         postProcessSource = d.string(forKey: Keys.postProcessSource) ?? "import os\n\n# Available values are in MEETGIST_* environment variables.\nprint(f\"Processed: {os.environ['MEETGIST_MEETING_TITLE']}\")\n"
         useTemplate = (d.object(forKey: Keys.useTemplate) as? Bool) ?? false
@@ -251,7 +254,8 @@ final class AppState: ObservableObject {
                 let pipeline = try Pipelines.make(transcription: tp, transcriptionKey: self.key(for: tp),
                                                   notes: np, notesKey: self.key(for: np),
                                                   notesTemplate: template)
-                _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline) { msg in
+                let generateNotes = self.autoGenerateNotes
+                _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline, generateNotes: generateNotes) { msg in
                     Task { @MainActor in
                         self.status = msg
                         if msg.localizedCaseInsensitiveContains("minute") || msg.localizedCaseInsensitiveContains("summar") { self.processStep = 1 }
@@ -259,8 +263,8 @@ final class AppState: ObservableObject {
                 }
                 try Task.checkCancellation()
                 self.refresh()
-                try await self.runPostProcessIfEnabled(for: dir)
-                self.state = .idle; self.status = "Notes ready."
+                if generateNotes { try await self.runPostProcessIfEnabled(for: dir) }
+                self.state = .idle; self.status = generateNotes ? "Notes ready." : "Transcript ready."
                 self.hud?(HUDEvent(kind: .done, text: "Done"))
             } catch is CancellationError {
                 self.state = .idle; self.status = "Canceled."
@@ -308,6 +312,10 @@ final class AppState: ObservableObject {
                 let job = self.offlineCoordinator.state(for: dir.lastPathComponent)
                 switch job?.status {
                 case .completed:
+                    guard self.autoGenerateNotes else {
+                        self.state = .idle; self.status = "Transcript ready."
+                        self.refresh(); return
+                    }
                     guard self.canGenerateMinutes else {
                         self.state = .idle; self.status = "Transcript ready. Add a Notes provider to generate minutes."
                         self.refresh(); return

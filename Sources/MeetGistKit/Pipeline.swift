@@ -60,9 +60,13 @@ public struct ComposedPipeline: MeetingPipeline, Sendable {
     let notesWriter: NotesWriter
 
     public func process(sessionDir: URL, micExists: Bool, systemExists: Bool,
+                        generateNotes: Bool = true,
                         progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult {
         let transcript = try await transcriber.transcribe(
             sessionDir: sessionDir, micExists: micExists, systemExists: systemExists, progress: progress)
+        guard generateNotes else {
+            return PipelineResult(transcript: transcript, polished: "", summary: "", model: transcriber.label)
+        }
         let (polished, summary) = try await notesWriter.notes(transcript: transcript, progress: progress)
         return PipelineResult(transcript: transcript, polished: polished, summary: summary,
                               model: "\(transcriber.label) → \(notesWriter.label)")
@@ -72,7 +76,7 @@ public struct ComposedPipeline: MeetingPipeline, Sendable {
 public protocol MeetingPipeline: Sendable {
     var providerName: String { get }
     func process(sessionDir: URL, micExists: Bool, systemExists: Bool,
-                 progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult
+                 generateNotes: Bool, progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult
 }
 
 public enum Pipelines {

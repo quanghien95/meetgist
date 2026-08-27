@@ -19,6 +19,14 @@ struct LibraryView: View {
     }
     private var isLive: Bool { state.state == .recording || state.state == .paused }
 
+    /// Only the meeting actively being processed is locked; finished meetings
+    /// stay renameable/deletable even while another one is transcribing.
+    private func isProcessing(_ meeting: Meeting) -> Bool {
+        guard state.state == .processing else { return false }
+        if let active = state.offlineCoordinator.activeSessionID { return meeting.id == active }
+        return meeting.id == state.selectedID
+    }
+
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
@@ -35,7 +43,7 @@ struct LibraryView: View {
                         ForEach(filtered) { meeting in
                             MeetingRow(
                                 meeting: meeting,
-                                canManage: !isLive && state.state != .processing,
+                                canManage: !isLive && !isProcessing(meeting),
                                 onRename: {
                                     meetingToRename = meeting
                                     renameText = meeting.title
@@ -119,9 +127,10 @@ struct LibraryView: View {
     }
 
     private func requestDeleteSelectedMeeting() {
-        guard !isLive, state.state != .processing,
+        guard !isLive,
               let selectedID = state.selectedID,
-              let meeting = state.meetings.first(where: { $0.id == selectedID })
+              let meeting = state.meetings.first(where: { $0.id == selectedID }),
+              !isProcessing(meeting)
         else { return }
         requestDelete(meeting)
     }

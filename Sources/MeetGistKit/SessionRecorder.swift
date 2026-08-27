@@ -80,6 +80,7 @@ public enum MeetingProcessor {
     @discardableResult
     public static func process(sessionDir: URL,
                                pipeline: MeetingPipeline,
+                               generateNotes: Bool = true,
                                progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult {
         let mic = sessionDir.appendingPathComponent("mic.m4a")
         let system = sessionDir.appendingPathComponent("system.m4a")
@@ -90,15 +91,17 @@ public enum MeetingProcessor {
         }
         let result = try await pipeline.process(
             sessionDir: sessionDir, micExists: micExists, systemExists: systemExists,
-            progress: progress)
+            generateNotes: generateNotes, progress: progress)
 
         func write(_ s: String, _ name: String) throws {
             try (s + "\n").write(to: sessionDir.appendingPathComponent(name),
                                  atomically: true, encoding: .utf8)
         }
         try write(result.transcript, "transcript.md")
-        try write(result.polished, "polished.md")
-        try write(result.summary, "summary.md")
+        if generateNotes {
+            try write(result.polished, "polished.md")
+            try write(result.summary, "summary.md")
+        }
         let meta: [String: Any] = ["provider": pipeline.providerName, "model": result.model]
         if let d = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted]) {
             try? d.write(to: sessionDir.appendingPathComponent("postprocess_meta.json"))

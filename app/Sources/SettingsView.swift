@@ -65,6 +65,7 @@ struct SettingsView: View {
                                 Button("Change…") { chooseFolder() }
                             }
                             Toggle(loc.t(L.autoTranscribe), isOn: $state.autoTranscribe)
+                            Toggle(loc.t(L.autoGenerateNotes), isOn: $state.autoGenerateNotes)
                             Toggle("Detect Google Meet and Microsoft Teams", isOn: $state.detectMeetings)
                             LaunchAtLoginToggle().environmentObject(loc)
                         }.padding(6)
