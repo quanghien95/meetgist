@@ -24,7 +24,20 @@ private struct MeetingDetectedView: View {
     let title: String; let onRecord: () -> Void; let onDismiss: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack { Image(systemName: "video.fill").foregroundStyle(Theme.mint); Text("Meeting detected").font(Theme.ui(14, .semibold)); Spacer(); Button(action: onDismiss) { Image(systemName: "xmark") }.buttonStyle(.plain) }
+            HStack {
+                Image(systemName: "video.fill").foregroundStyle(Theme.mint)
+                Text("Meeting detected").font(Theme.ui(14, .semibold))
+                Spacer()
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.muted)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+            }
             Text(title).font(Theme.ui(12)).foregroundStyle(Theme.muted)
             Button("Record now", action: onRecord).buttonStyle(MintButton())
         }.padding(14).frame(width: 285).background(Theme.panel.opacity(0.98)).clipShape(RoundedRectangle(cornerRadius: 12))

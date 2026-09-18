@@ -33,13 +33,21 @@ public final class OfflineJobCoordinator: ObservableObject {
     public func state(for sessionID: String) -> OfflineJobState? { jobs[sessionID] }
 
     /// Rebuild the simple in-memory incomplete-job list. Heavy work never starts here.
+    /// Walks subdirectories directly (rather than `MeetingStore.list`, which also
+    /// stats audio/transcript/notes files and reads title files per folder) since
+    /// only an offline-job state file per folder is needed here.
     public func scan(outputDir: URL) {
+        let fm = FileManager.default
+        let dirs = (try? fm.contentsOfDirectory(
+            at: outputDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        )) ?? []
         var recovered: [String: OfflineJobState] = [:]
-        for meeting in MeetingStore.list(in: outputDir) {
-            let store = OfflineJobStore(sessionDir: meeting.dir)
-            guard FileManager.default.fileExists(atPath: store.stateURL.path),
+        for url in dirs {
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            let store = OfflineJobStore(sessionDir: url)
+            guard fm.fileExists(atPath: store.stateURL.path),
                   let state = try? store.recover() else { continue }
-            recovered[meeting.id] = state
+            recovered[url.lastPathComponent] = state
         }
         jobs = recovered
     }

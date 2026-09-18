@@ -95,14 +95,22 @@ final class AppState: ObservableObject {
         if let data = d.data(forKey: Keys.custom), let arr = try? JSONDecoder().decode([Provider].self, from: data) { customProviders = arr }
         else { customProviders = [] }
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
-        refresh(); refreshKeyFlag()
+        refreshKeyFlag()
         offlineRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
         offlineCoordinator.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
         localNotesRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
-        offlineCoordinator.scan(outputDir: outputDir)
+        // Scanning the output directory does synchronous disk I/O per session
+        // folder; run it off the main thread (and defer the coordinator scan a
+        // beat) so launch shows the window immediately instead of blocking on
+        // however many meetings exist.
+        refresh()
+        Task { [weak self] in
+            guard let self else { return }
+            self.offlineCoordinator.scan(outputDir: self.outputDir)
+        }
     }
 
     // MARK: Providers (v1.1)
@@ -159,7 +167,20 @@ final class AppState: ObservableObject {
     private func saveCustom() { if let data = try? JSONEncoder().encode(customProviders) { UserDefaults.standard.set(data, forKey: Keys.custom) }; refreshKeyFlag() }
 
     // MARK: Meetings
-    func refresh() { meetings = MeetingStore.list(in: outputDir) }
+    /// Scanning the output directory does synchronous disk I/O per session
+    /// folder (existence checks, title file reads, resource values) that scales
+    /// with meeting count. Run it off the main actor so it never blocks the UI,
+    /// most importantly at launch.
+    func refresh() {
+        let dir = outputDir
+        Task.detached(priority: .userInitiated) {
+            let list = MeetingStore.list(in: dir)
+            await MainActor.run { [weak self] in
+                guard let self, self.outputDir == dir else { return }
+                self.meetings = list
+            }
+        }
+    }
     var selectedMeeting: Meeting? { meetings.first { $0.id == selectedID } }
 
     // MARK: Recording

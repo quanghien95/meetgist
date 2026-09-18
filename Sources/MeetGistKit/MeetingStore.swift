@@ -6,7 +6,7 @@ import Foundation
 public struct Meeting: Identifiable, Sendable, Hashable {
     public let id: String        // folder name
     public let dir: URL
-    public let date: Date?
+    public let date: Date?       // creation time; stable across later edits to the folder
     public let title: String
     public let hasTranscript: Bool
     public let hasNotes: Bool
@@ -20,7 +20,7 @@ public enum MeetingStore {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: outputDir,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
 
@@ -35,13 +35,37 @@ public enum MeetingStore {
             let hasSummary = fm.fileExists(atPath: url.appendingPathComponent("summary.md").path)
             let hasNotes = hasMinutes && hasSummary
             guard hasAudio || hasTranscript || hasMinutes || hasSummary else { continue }
-            let date = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate
-            out.append(Meeting(id: url.lastPathComponent, dir: url, date: date,
+            out.append(Meeting(id: url.lastPathComponent, dir: url, date: createdDate(for: url),
                                title: displayTitle(for: url), hasTranscript: hasTranscript,
                                hasNotes: hasNotes))
         }
         return out.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+    }
+
+    /// Stable "created" timestamp for a session folder. Prefers the
+    /// `yyyy-MM-dd-HHmm-` prefix baked into the folder name at recording time
+    /// (immune to later edits like transcription/notes/rename touching mtime),
+    /// falling back to filesystem creation time and finally modification time
+    /// for folders that don't follow that naming convention (e.g. imports).
+    private static func createdDate(for url: URL) -> Date? {
+        if let fromName = dateFromFolderName(url.lastPathComponent) { return fromName }
+        let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        return values?.creationDate ?? values?.contentModificationDate
+    }
+
+    private static let folderNameDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd-HHmm"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.current
+        return f
+    }()
+
+    private static func dateFromFolderName(_ folder: String) -> Date? {
+        let parts = folder.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count > 4 else { return nil }
+        let prefix = parts[0...3].joined(separator: "-")
+        return folderNameDateFormatter.date(from: prefix)
     }
 
     /// Read one of the markdown outputs (e.g. "transcript.md").
@@ -57,16 +81,8 @@ public enum MeetingStore {
             throw NSError(domain: "MeetGist.MeetingStore", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Meeting name cannot be empty."])
         }
-        let fm = FileManager.default
-        let originalDate = try? meeting.dir.resourceValues(forKeys: [.contentModificationDateKey])
-            .contentModificationDate
         try (title + "\n").write(to: meeting.dir.appendingPathComponent(titleFile),
                                   atomically: true, encoding: .utf8)
-        // The library uses the session directory mtime as its meeting date and
-        // sort key. A display-only rename must not make an old meeting look new.
-        if let originalDate {
-            try fm.setAttributes([.modificationDate: originalDate], ofItemAtPath: meeting.dir.path)
-        }
     }
 
     private static func displayTitle(for dir: URL) -> String {
