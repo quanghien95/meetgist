@@ -20,7 +20,8 @@ struct LibraryView: View {
     private var isLive: Bool { state.state == .recording || state.state == .paused }
 
     /// Only the meeting actively being processed is locked; finished meetings
-    /// stay renameable/deletable even while another one is transcribing.
+    /// stay renameable/deletable even while another one is transcribing or a
+    /// different meeting is being recorded.
     private func isProcessing(_ meeting: Meeting) -> Bool {
         guard state.state == .processing else { return false }
         if let active = state.offlineCoordinator.activeSessionID { return meeting.id == active }
@@ -30,12 +31,22 @@ struct LibraryView: View {
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted).font(.system(size: 11))
-                    TextField(loc.t(L.search), text: $query)
-                        .textFieldStyle(.plain).font(Theme.mono(12))
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted).font(.system(size: 11))
+                        TextField(loc.t(L.search), text: $query)
+                            .textFieldStyle(.plain).font(Theme.mono(12))
+                    }
+                    .padding(8).background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
+
+                    Button { state.importAudio() } label: {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 28, height: 28)
+                    .background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
+                    .help(loc.t(L.importAudio))
                 }
-                .padding(8).background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
                 .padding(10)
 
                 List(selection: $state.selectedID) {
@@ -43,7 +54,7 @@ struct LibraryView: View {
                         ForEach(filtered) { meeting in
                             MeetingRow(
                                 meeting: meeting,
-                                canManage: !isLive && !isProcessing(meeting),
+                                canManage: !isProcessing(meeting),
                                 onRename: {
                                     meetingToRename = meeting
                                     renameText = meeting.title
@@ -89,6 +100,14 @@ struct LibraryView: View {
                 if isLive { TimerLabel(seconds: state.elapsed, size: 11) }
                 Text(state.status).font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
                 Spacer()
+                if state.isLoadingMeetings {
+                    ProgressView().controlSize(.small)
+                    Text("\(loc.t(L.loadingMeetings)) (\(state.meetings.count))")
+                        .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
+                } else {
+                    Text("\(state.meetings.count)")
+                        .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
+                }
                 if !state.hasKeys {
                     Button(loc.t(L.settings)) { state.showSettings = true }.buttonStyle(.link).font(.callout)
                 }

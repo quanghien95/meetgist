@@ -36,7 +36,18 @@ public final class OfflineJobCoordinator: ObservableObject {
     /// Walks subdirectories directly (rather than `MeetingStore.list`, which also
     /// stats audio/transcript/notes files and reads title files per folder) since
     /// only an offline-job state file per folder is needed here.
+    ///
+    /// The directory walk and per-folder state recovery are synchronous disk I/O
+    /// that scale with meeting count, so they run off the main actor (mirroring
+    /// `AppState.refresh()`); only the final assignment hops back to publish.
     public func scan(outputDir: URL) {
+        Task.detached(priority: .userInitiated) {
+            let recovered = Self.scanSync(outputDir: outputDir)
+            await MainActor.run { [weak self] in self?.jobs = recovered }
+        }
+    }
+
+    private nonisolated static func scanSync(outputDir: URL) -> [String: OfflineJobState] {
         let fm = FileManager.default
         let dirs = (try? fm.contentsOfDirectory(
             at: outputDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
@@ -49,7 +60,7 @@ public final class OfflineJobCoordinator: ObservableObject {
                   let state = try? store.recover() else { continue }
             recovered[url.lastPathComponent] = state
         }
-        jobs = recovered
+        return recovered
     }
 
     @discardableResult

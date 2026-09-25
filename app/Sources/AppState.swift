@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 import Combine
 import AppKit
+import UniformTypeIdentifiers
 import MeetGistKit
 
 enum RecState: Equatable { case idle, recording, paused, processing, error }
@@ -26,6 +27,7 @@ final class AppState: ObservableObject {
     @Published var meetings: [Meeting] = []
     @Published var selectedID: Meeting.ID?
     @Published var showSettings = false
+    @Published var isLoadingMeetings = false
 
     // Settings
     @Published var outputDir: URL { didSet { persistOutput(); refresh(); offlineCoordinator.scan(outputDir: outputDir) } }
@@ -102,15 +104,12 @@ final class AppState: ObservableObject {
             .store(in: &managerCancellables)
         localNotesRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
-        // Scanning the output directory does synchronous disk I/O per session
-        // folder; run it off the main thread (and defer the coordinator scan a
-        // beat) so launch shows the window immediately instead of blocking on
-        // however many meetings exist.
+        // refresh() and offlineCoordinator.scan() each do synchronous disk I/O
+        // per session folder that scales with meeting count; both hop off the
+        // main actor internally so launch shows the window immediately instead
+        // of blocking on however many meetings exist.
         refresh()
-        Task { [weak self] in
-            guard let self else { return }
-            self.offlineCoordinator.scan(outputDir: self.outputDir)
-        }
+        offlineCoordinator.scan(outputDir: outputDir)
     }
 
     // MARK: Providers (v1.1)
@@ -171,13 +170,24 @@ final class AppState: ObservableObject {
     /// folder (existence checks, title file reads, resource values) that scales
     /// with meeting count. Run it off the main actor so it never blocks the UI,
     /// most importantly at launch.
+    ///
+    /// Cache-first: paint the last-known list from `.meetgist-cache.json`
+    /// immediately (if present), then re-scan the real directory in the
+    /// background and replace `meetings` + refresh the cache when it lands.
+    /// This avoids a blank list for however long the full scan takes.
     func refresh() {
         let dir = outputDir
+        if let cached = MeetingListCache.load(outputDir: dir) {
+            meetings = cached
+        }
+        isLoadingMeetings = true
         Task.detached(priority: .userInitiated) {
             let list = MeetingStore.list(in: dir)
+            MeetingListCache.save(list, outputDir: dir)
             await MainActor.run { [weak self] in
                 guard let self, self.outputDir == dir else { return }
                 self.meetings = list
+                self.isLoadingMeetings = false
             }
         }
     }
@@ -235,18 +245,25 @@ final class AppState: ObservableObject {
         recorder = nil
         refresh(); selectedID = dir.lastPathComponent
         hud?(HUDEvent(kind: .stopped, text: "Saved"))
+        await finishNewSession(dir, savedMessage: "Saved")
+    }
+
+    /// Shared "what happens after a new session's audio exists on disk" path,
+    /// used by both recording (stopRecording) and audio import: kicks off
+    /// auto-transcription per the user's settings, or reports why it didn't.
+    private func finishNewSession(_ dir: URL, savedMessage: String) async {
         if usesOfflineTranscription {
             if autoTranscribe {
                 if offlineRuntime.state == .ready { process(dir) }
                 else {
                     await offlineCoordinator.markSetupRequired(sessionDir: dir, config: offlineConfig)
-                    state = .idle; status = "Saved. Install Local Whisper in Settings to transcribe."
+                    state = .idle; status = "\(savedMessage). Install Local Whisper in Settings to transcribe."
                 }
-            } else { state = .idle; status = "Saved." }
+            } else { state = .idle; status = "\(savedMessage)." }
         } else if hasKeys && autoTranscribe { process(dir) }
         else {
             state = .idle
-            status = hasKeys ? "Saved." : "Saved. \(setupRequiredStatus)"
+            status = hasKeys ? "\(savedMessage)." : "\(savedMessage). \(setupRequiredStatus)"
         }
     }
 
@@ -485,6 +502,56 @@ final class AppState: ObservableObject {
         }
     }
     func reprocessSelected() { guard let m = selectedMeeting else { return }; process(m.dir) }
+
+    // MARK: Import
+    static let importableAudioTypes: [UTType] = [.mp3, .wav, .aiff, .mpeg4Audio, .audio]
+        .compactMap { $0 } + [UTType(filenameExtension: "flac")].compactMap { $0 }
+
+    /// Opens a file picker for an existing audio recording and imports it as a
+    /// new meeting, transcoding it into a fresh session folder so it behaves
+    /// exactly like a recorded meeting from then on (transcribe, notes, rename…).
+    func importAudio() {
+        guard recorder == nil else {
+            status = "Stop recording before importing audio."
+            return
+        }
+        guard state != .processing else {
+            status = "Wait for the current task to finish before importing audio."
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = Self.importableAudioTypes
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+
+        let dir = outputDir
+        let name = "imported-\(Self.importFolderStamp())"
+        let sessionDir = dir.appendingPathComponent(name)
+        state = .processing; status = "Importing…"
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+                try await AudioTools.export(source, to: sessionDir.appendingPathComponent("mic.m4a"))
+                self.refresh(); self.selectedID = sessionDir.lastPathComponent
+                await self.finishNewSession(sessionDir, savedMessage: "Imported")
+            } catch {
+                self.state = .error; self.lastError = error.localizedDescription
+                self.status = "Import failed"
+            }
+        }
+    }
+
+    private static func importFolderStamp() -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        df.locale = Locale(identifier: "en_US_POSIX")
+        let day = df.string(from: Date())
+        let seconds = Int(Date().timeIntervalSince1970)
+        return "\(day)-\(seconds)"
+    }
     func renameMeeting(_ meeting: Meeting, to title: String) {
         do {
             try MeetingStore.rename(meeting, to: title)

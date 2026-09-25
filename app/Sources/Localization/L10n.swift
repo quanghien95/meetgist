@@ -108,6 +108,8 @@ enum L {
     static let noMeetings = LStr(en: "No meetings yet. Press Record (or ⌥⌘K) to start.",
                                  zh: "还没有记录。按下录制（或 ⌥⌘K）开始。")
     static let record     = LStr(en: "Record", zh: "录制")
+    static let importAudio = LStr(en: "Import Audio…", zh: "导入音频…")
+    static let loadingMeetings = LStr(en: "Loading meetings…", zh: "正在加载会议…")
     static let emptyHint  = LStr(
         en: "Press ⌥⌘K (or Record) to capture a meeting. MeetGist writes the transcript, polished minutes, and a summary with decisions & action items.",
         zh: "按 ⌥⌘K（或点「录制」）开始记录。结束后自动生成转录、精炼纪要，以及含关键决定与行动项的摘要。")

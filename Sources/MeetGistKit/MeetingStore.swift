@@ -3,13 +3,34 @@
 import Foundation
 
 /// A recorded/imported session folder surfaced to the UI.
-public struct Meeting: Identifiable, Sendable, Hashable {
+public struct Meeting: Identifiable, Sendable, Hashable, Codable {
     public let id: String        // folder name
     public let dir: URL
     public let date: Date?       // creation time; stable across later edits to the folder
     public let title: String
     public let hasTranscript: Bool
     public let hasNotes: Bool
+}
+
+/// Caches the last-known meeting list to disk so launch can paint instantly
+/// with stale data while `MeetingStore.list` re-scans in the background.
+/// Best-effort: any read/write failure is treated as "no cache".
+public enum MeetingListCache {
+    private static let fileName = ".meetgist-cache.json"
+
+    private static func url(for outputDir: URL) -> URL {
+        outputDir.appendingPathComponent(fileName)
+    }
+
+    public static func load(outputDir: URL) -> [Meeting]? {
+        guard let data = try? Data(contentsOf: url(for: outputDir)) else { return nil }
+        return try? JSONDecoder().decode([Meeting].self, from: data)
+    }
+
+    public static func save(_ meetings: [Meeting], outputDir: URL) {
+        guard let data = try? JSONEncoder().encode(meetings) else { return }
+        try? data.write(to: url(for: outputDir), options: .atomic)
+    }
 }
 
 /// Lists and reads session folders under the output directory.
