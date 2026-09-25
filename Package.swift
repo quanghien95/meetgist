@@ -18,6 +18,8 @@ let package = Package(
             name: "MeetGistKit",
             resources: [.copy("Resources/offline_worker.py"),
                         .copy("Resources/offline-requirements.lock"),
+                        .copy("Resources/offline_worker_qwen.py"),
+                        .copy("Resources/offline-requirements-qwen.lock"),
                         .copy("Resources/qwen_notes_worker.py"),
                         .copy("Resources/qwen-notes-requirements.lock")]
         ),

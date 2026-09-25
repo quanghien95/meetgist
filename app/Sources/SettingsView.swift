@@ -141,7 +141,11 @@ struct ProviderSlot: View {
                     ForEach(providers) { Text($0.name).tag($0.id) }
                 }
                 if selected.transcribeStyle == "offline" && slot == "transcribe" {
-                    OfflineProviderSettings()
+                    if selected.id == "offline-qwen3-asr" {
+                        QwenASRProviderSettings()
+                    } else {
+                        OfflineProviderSettings()
+                    }
                 } else if selected.notesStyle == "apple" && slot == "notes" {
                     AppleOnDeviceProviderSettings()
                 } else if selected.notesStyle == "qwen-mlx" && slot == "notes" {
@@ -205,9 +209,7 @@ struct OfflineProviderSettings: View {
                     Text("Korean").tag("ko")
                 }.labelsHidden()
             }
-            TextField("Optional technical vocabulary", text: $state.offlineVocabulary)
-            Text("Used as an initial transcription prompt. One local job and one five-minute chunk run at a time.")
-                .font(.caption).foregroundStyle(.secondary)
+            HotwordsField()
         }
     }
 
@@ -247,6 +249,104 @@ struct OfflineProviderSettings: View {
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.callout).foregroundStyle(Theme.amber)
         }
+    }
+}
+
+struct QwenASRProviderSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Qwen3-ASR · 1.7B · 4-bit · Apple Silicon").font(.callout)
+                Spacer()
+                runtimeAction
+            }
+            runtimeStatus
+            Text("Model download: approximately \(ByteCountFormatter.string(fromByteCount: Qwen3ASRRuntimeManager.modelDownloadBytes, countStyle: .decimal)). Python runtime and packages need additional space.")
+                .font(.caption).foregroundStyle(.secondary)
+            if state.qwenASRRuntime.state == .installing {
+                ProgressView(value: state.qwenASRRuntime.installProgress)
+            }
+            HStack {
+                Text("Language").frame(width: 100, alignment: .leading)
+                Picker("", selection: $state.offlineLanguage) {
+                    Text("Auto-detect").tag("auto")
+                    Text("English").tag("en")
+                    Text("Chinese").tag("zh")
+                    Text("Spanish").tag("es")
+                    Text("French").tag("fr")
+                    Text("German").tag("de")
+                    Text("Japanese").tag("ja")
+                    Text("Korean").tag("ko")
+                }.labelsHidden()
+            }
+            HotwordsField()
+            Text("Qwen3-ASR has no per-sentence timestamps: each 5-minute chunk becomes one transcript line instead of one per sentence.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var runtimeAction: some View {
+        switch state.qwenASRRuntime.state {
+        case .notInstalled:
+            if Qwen3ASRRuntimeManager.isSupported {
+                Button(loc.t(L.install)) { state.installQwenASRRuntime() }
+            }
+        case .installing:
+            EmptyView()
+        case .ready:
+            Button(loc.t(L.remove)) { state.removeQwenASRRuntime() }
+        case .failed:
+            Button(loc.t(L.retry)) { state.installQwenASRRuntime() }
+        }
+    }
+
+    @ViewBuilder private var runtimeStatus: some View {
+        switch state.qwenASRRuntime.state {
+        case .notInstalled:
+            if Qwen3ASRRuntimeManager.isSupported {
+                Label(loc.t(L.notInstalled), systemImage: "arrow.down.circle")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Label("Offline Local Qwen3-ASR requires Apple Silicon.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(Theme.amber)
+            }
+        case .installing:
+            Label(state.qwenASRRuntime.installDetail, systemImage: "arrow.triangle.2.circlepath")
+                .font(.callout).foregroundStyle(.secondary)
+        case .ready:
+            Label(loc.t(L.ready), systemImage: "checkmark.seal.fill")
+                .font(.callout).foregroundStyle(.green)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout).foregroundStyle(Theme.amber)
+        }
+    }
+}
+
+/// Shared hotwords/context-keywords field for both local engines: Whisper
+/// uses it as an `initial_prompt`, Qwen3-ASR as its native `hotwords` list.
+struct HotwordsField: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("Hotwords / context keywords", text: $state.offlineVocabulary)
+            Menu {
+                ForEach(HotwordPresets.all) { preset in
+                    Button(preset.name) { state.offlineVocabulary = preset.keywords }
+                }
+            } label: {
+                Label("Preset", systemImage: "list.bullet")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        Text("Comma-separated terms to bias transcription toward — jargon, product/client names, acronyms. Works with both Whisper and Qwen3-ASR. Pick a preset to replace the list, then edit freely. One local job and one five-minute chunk run at a time.")
+            .font(.caption).foregroundStyle(.secondary)
     }
 }
 

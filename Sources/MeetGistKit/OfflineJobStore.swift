@@ -6,6 +6,17 @@ public let offlineEngine = "mlx-whisper"
 public let offlineModel = "mlx-community/whisper-large-v3-mlx"
 public let offlineConfigID = "mlx-whisper-large-v3-v1"
 
+public let qwenASREngine = "qwen3-asr"
+public let qwenASRModel = "mlx-community/Qwen3-ASR-1.7B-4bit"
+
+/// Namespaces cached transcription parts by engine+model so switching the
+/// offline provider can never reuse another engine's incompatible output —
+/// `isReusable` already checks `part.configID == state.configID`.
+public func offlineConfigID(engine: String, model: String) -> String {
+    let sanitizedModel = model.replacingOccurrences(of: "/", with: "-")
+    return "\(engine)-\(sanitizedModel)-v1"
+}
+
 public enum OfflineJobStatus: String, Codable, Sendable, Equatable {
     case pending, transcribing, paused, completed, failed, canceled
 }
@@ -98,7 +109,7 @@ public struct OfflineJobState: Codable, Sendable, Equatable {
         self.jobID = jobID
         self.sessionID = sessionID
         self.status = status
-        self.configID = offlineConfigID
+        self.configID = offlineConfigID(engine: config.engine, model: config.model)
         self.config = config
         self.tracks = tracks
         self.progress = OfflineJobProgress(totalSeconds: tracks.values.reduce(0) { $0 + $1.durationSeconds })

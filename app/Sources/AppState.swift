@@ -30,7 +30,13 @@ final class AppState: ObservableObject {
     @Published var isLoadingMeetings = false
 
     // Settings
-    @Published var outputDir: URL { didSet { persistOutput(); refresh(); offlineCoordinator.scan(outputDir: outputDir) } }
+    @Published var outputDir: URL {
+        didSet {
+            persistOutput(); refresh()
+            offlineCoordinator.scan(outputDir: outputDir)
+            qwenASRCoordinator.scan(outputDir: outputDir)
+        }
+    }
     @Published var presence: Presence { didSet { UserDefaults.standard.set(presence.rawValue, forKey: Keys.presence) } }
     @Published var autoTranscribe: Bool { didSet { UserDefaults.standard.set(autoTranscribe, forKey: Keys.auto) } }
     @Published var detectMeetings: Bool { didSet { UserDefaults.standard.set(detectMeetings, forKey: Keys.detectMeetings) } }
@@ -47,9 +53,22 @@ final class AppState: ObservableObject {
     @Published var hasKeys = false
 
     lazy var offlineRuntime = OfflineRuntimeManager()
-    lazy var offlineCoordinator = OfflineJobCoordinator(runtime: offlineRuntime)
+    lazy var offlineCoordinator = OfflineJobCoordinator(runtime: offlineRuntime, workerResourceName: "offline_worker")
+    lazy var qwenASRRuntime = Qwen3ASRRuntimeManager()
+    lazy var qwenASRCoordinator = OfflineJobCoordinator(runtime: qwenASRRuntime, workerResourceName: "offline_worker_qwen")
     lazy var localNotesRuntime = LocalNotesRuntimeManager()
     private var managerCancellables = Set<AnyCancellable>()
+
+    /// The offline runtime/coordinator pair for the currently selected
+    /// transcription provider. Each local engine (Whisper, Qwen3-ASR) has its
+    /// own fully independent runtime and job coordinator, so switching the
+    /// provider never mixes up install state or in-flight jobs between them.
+    private var activeOfflineRuntime: any OfflineTranscriptionRuntime {
+        transcriptionProviderID == "offline-qwen3-asr" ? qwenASRRuntime : offlineRuntime
+    }
+    var activeOfflineCoordinator: OfflineJobCoordinator {
+        transcriptionProviderID == "offline-qwen3-asr" ? qwenASRCoordinator : offlineCoordinator
+    }
 
     /// Set by the app so AppState can flash the HUD on transitions.
     var hud: ((HUDEvent) -> Void)?
@@ -93,7 +112,7 @@ final class AppState: ObservableObject {
         transcriptionProviderID = d.string(forKey: Keys.transcribe) ?? "gemini"
         notesProviderID = d.string(forKey: Keys.notes) ?? "gemini"
         offlineLanguage = d.string(forKey: Keys.offlineLanguage) ?? "auto"
-        offlineVocabulary = d.string(forKey: Keys.offlineVocabulary) ?? ""
+        offlineVocabulary = d.string(forKey: Keys.offlineVocabulary) ?? HotwordPresets.defaultKeywords
         if let data = d.data(forKey: Keys.custom), let arr = try? JSONDecoder().decode([Provider].self, from: data) { customProviders = arr }
         else { customProviders = [] }
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -102,14 +121,19 @@ final class AppState: ObservableObject {
             .store(in: &managerCancellables)
         offlineCoordinator.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
+        qwenASRRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &managerCancellables)
+        qwenASRCoordinator.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &managerCancellables)
         localNotesRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
-        // refresh() and offlineCoordinator.scan() each do synchronous disk I/O
-        // per session folder that scales with meeting count; both hop off the
+        // refresh() and each coordinator's scan() do synchronous disk I/O per
+        // session folder that scales with meeting count; both hop off the
         // main actor internally so launch shows the window immediately instead
         // of blocking on however many meetings exist.
         refresh()
         offlineCoordinator.scan(outputDir: outputDir)
+        qwenASRCoordinator.scan(outputDir: outputDir)
     }
 
     // MARK: Providers (v1.1)
@@ -141,7 +165,7 @@ final class AppState: ObservableObject {
         notesProvider.notesStyle == "apple" || notesProvider.notesStyle == "qwen-mlx"
     }
     var canStartTranscription: Bool {
-        usesOfflineTranscription ? offlineRuntime.state == .ready : hasKey(transcriptionProvider)
+        usesOfflineTranscription ? activeOfflineRuntime.state == .ready : hasKey(transcriptionProvider)
     }
     var canGenerateMinutes: Bool {
         switch notesProvider.notesStyle {
@@ -151,9 +175,15 @@ final class AppState: ObservableObject {
         }
     }
     var offlineConfig: OfflineJobConfig {
-        OfflineJobConfig(language: offlineLanguage, vocabulary: offlineVocabulary)
+        let engine = transcriptionProviderID == "offline-qwen3-asr" ? qwenASREngine : offlineEngine
+        let model = transcriptionProviderID == "offline-qwen3-asr" ? qwenASRModel : offlineModel
+        return OfflineJobConfig(engine: engine, model: model, language: offlineLanguage, vocabulary: offlineVocabulary)
     }
-    func offlineJob(for meeting: Meeting) -> OfflineJobState? { offlineCoordinator.state(for: meeting.id) }
+    /// A meeting may have been transcribed by either local engine, independent
+    /// of which one is currently selected — check both coordinators.
+    func offlineJob(for meeting: Meeting) -> OfflineJobState? {
+        offlineCoordinator.state(for: meeting.id) ?? qwenASRCoordinator.state(for: meeting.id)
+    }
     private func refreshKeyFlag() { hasKeys = canStartTranscription && canGenerateMinutes }
     private var setupRequiredStatus: String {
         if !canStartTranscription { return "Add an API key for the Transcription provider." }
@@ -210,9 +240,13 @@ final class AppState: ObservableObject {
     private func startRecording() async {
         // Recording has absolute priority over the local worker. Cancellation of
         // the active Swift task prevents its completion handler racing recording.
+        // Either local engine's coordinator could have an active job.
         if offlineCoordinator.activeSessionID != nil {
             processTask?.cancel()
             await offlineCoordinator.stopForRecording()
+        } else if qwenASRCoordinator.activeSessionID != nil {
+            processTask?.cancel()
+            await qwenASRCoordinator.stopForRecording()
         } else if localNotesTaskActive {
             processTask?.cancel()
             await processTask?.value
@@ -254,10 +288,10 @@ final class AppState: ObservableObject {
     private func finishNewSession(_ dir: URL, savedMessage: String) async {
         if usesOfflineTranscription {
             if autoTranscribe {
-                if offlineRuntime.state == .ready { process(dir) }
+                if activeOfflineRuntime.state == .ready { process(dir) }
                 else {
-                    await offlineCoordinator.markSetupRequired(sessionDir: dir, config: offlineConfig)
-                    state = .idle; status = "\(savedMessage). Install Local Whisper in Settings to transcribe."
+                    await activeOfflineCoordinator.markSetupRequired(sessionDir: dir, config: offlineConfig)
+                    state = .idle; status = "\(savedMessage). Install the local transcription engine in Settings to transcribe."
                 }
             } else { state = .idle; status = "\(savedMessage)." }
         } else if hasKeys && autoTranscribe { process(dir) }
@@ -325,7 +359,7 @@ final class AppState: ObservableObject {
             status = "Another processing task is already running."
             return
         }
-        if let active = offlineCoordinator.activeSessionID {
+        if let active = offlineCoordinator.activeSessionID ?? qwenASRCoordinator.activeSessionID {
             status = active == dir.lastPathComponent
                 ? "Local transcription is already running."
                 : "Another local transcription is already running."
@@ -334,20 +368,21 @@ final class AppState: ObservableObject {
         processTask?.cancel()
         state = .processing; processStep = 0; status = "Starting local transcription…"
         hud?(HUDEvent(kind: .processing, text: "…"))
+        let coordinator = activeOfflineCoordinator
         processTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.offlineCoordinator.start(sessionDir: dir, config: self.offlineConfig)
-                while self.offlineCoordinator.activeSessionID != nil {
+                try await coordinator.start(sessionDir: dir, config: self.offlineConfig)
+                while coordinator.activeSessionID != nil {
                     try Task.checkCancellation()
-                    if let job = self.offlineCoordinator.state(for: dir.lastPathComponent) {
+                    if let job = coordinator.state(for: dir.lastPathComponent) {
                         let percent = Int(job.progress.fraction * 100)
                         self.status = "Local transcription \(percent)%"
                     }
                     try await Task.sleep(for: .milliseconds(500))
                 }
                 try Task.checkCancellation()
-                let job = self.offlineCoordinator.state(for: dir.lastPathComponent)
+                let job = coordinator.state(for: dir.lastPathComponent)
                 switch job?.status {
                 case .completed:
                     guard self.autoGenerateNotes else {
@@ -383,18 +418,18 @@ final class AppState: ObservableObject {
         }
     }
 
-    func pauseOffline() { Task { await offlineCoordinator.pause(); state = .idle; status = "Local transcription paused." } }
+    func pauseOffline() { Task { await activeOfflineCoordinator.pause(); state = .idle; status = "Local transcription paused." } }
     func resumeOffline(_ meeting: Meeting) { processOffline(meeting.dir) }
     func retryOffline(_ meeting: Meeting) { processOffline(meeting.dir) }
     func retranscribeOffline(_ meeting: Meeting) {
-        guard offlineRuntime.state == .ready else {
+        guard activeOfflineRuntime.state == .ready else {
             state = .error
             lastError = OfflineCoordinatorError.runtimeNotReady.localizedDescription
             status = "Local transcription failed"
             return
         }
         do {
-            try offlineCoordinator.resetTranscription(sessionDir: meeting.dir)
+            try activeOfflineCoordinator.resetTranscription(sessionDir: meeting.dir)
             processOffline(meeting.dir)
         } catch {
             state = .error; lastError = error.localizedDescription
@@ -403,8 +438,8 @@ final class AppState: ObservableObject {
     }
     func cancelProcessing() {
         processTask?.cancel()
-        if offlineCoordinator.activeSessionID != nil {
-            Task { await offlineCoordinator.cancel(); state = .idle; status = "Canceled." }
+        if let active = [offlineCoordinator, qwenASRCoordinator].first(where: { $0.activeSessionID != nil }) {
+            Task { await active.cancel(); state = .idle; status = "Canceled." }
         } else { state = .idle; status = "Canceled." }
     }
 
@@ -490,6 +525,14 @@ final class AppState: ObservableObject {
             catch { lastError = error.localizedDescription }
         }
     }
+    func installQwenASRRuntime() { Task { await qwenASRRuntime.install(); refreshKeyFlag() } }
+    func removeQwenASRRuntime() {
+        Task {
+            await qwenASRCoordinator.cancel()
+            do { try qwenASRRuntime.remove(); refreshKeyFlag() }
+            catch { lastError = error.localizedDescription }
+        }
+    }
     func installLocalNotesRuntime() {
         Task { await localNotesRuntime.install(); refreshKeyFlag() }
     }
@@ -562,7 +605,7 @@ final class AppState: ObservableObject {
         }
     }
     func moveMeetingToTrash(_ meeting: Meeting) {
-        guard offlineCoordinator.activeSessionID != meeting.id else {
+        guard offlineCoordinator.activeSessionID != meeting.id, qwenASRCoordinator.activeSessionID != meeting.id else {
             lastError = "Pause or cancel transcription before deleting this meeting."
             status = "Meeting is in use."
             return
@@ -578,6 +621,7 @@ final class AppState: ObservableObject {
                 if self.selectedID == meeting.id { self.selectedID = nil }
                 self.refresh()
                 self.offlineCoordinator.scan(outputDir: self.outputDir)
+                self.qwenASRCoordinator.scan(outputDir: self.outputDir)
                 self.status = "Meeting moved to Trash."
             }
         }

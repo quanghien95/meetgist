@@ -10,25 +10,43 @@ public enum OfflineCoordinatorError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .runtimeNotReady: return "Local Whisper is not installed. Open Settings to install it."
+        case .runtimeNotReady: return "The local runtime is not installed. Open Settings to install it."
         case .jobAlreadyRunning: return "Another local transcription is already running."
         case .workerMissing: return "The bundled offline transcription worker is missing."
         }
     }
 }
 
+/// What `OfflineJobCoordinator` needs from an app-managed local runtime.
+/// `OfflineRuntimeManager` (Whisper) and `Qwen3ASRRuntimeManager` (Qwen3-ASR)
+/// both already expose exactly this shape.
+@MainActor
+public protocol OfflineTranscriptionRuntime: AnyObject {
+    var state: OfflineRuntimeState { get }
+    var pythonURL: URL { get }
+    var modelURL: URL { get }
+}
+extension OfflineRuntimeManager: OfflineTranscriptionRuntime {}
+extension Qwen3ASRRuntimeManager: OfflineTranscriptionRuntime {}
+
 @MainActor
 public final class OfflineJobCoordinator: ObservableObject {
     @Published public private(set) var jobs: [String: OfflineJobState] = [:]
     @Published public private(set) var activeSessionID: String?
 
-    private let runtime: OfflineRuntimeManager
+    private let runtime: OfflineTranscriptionRuntime
+    /// Resource name (without extension) of the `.py` worker bundled for this
+    /// engine, e.g. "offline_worker" (Whisper) or "offline_worker_qwen" (Qwen3-ASR).
+    private let workerResourceName: String
     private var process: Process?
     private var activeStore: OfflineJobStore?
     private var monitorTask: Task<Void, Never>?
     private var requestedStopStatus: OfflineJobStatus?
 
-    public init(runtime: OfflineRuntimeManager) { self.runtime = runtime }
+    public init(runtime: OfflineTranscriptionRuntime, workerResourceName: String = "offline_worker") {
+        self.runtime = runtime
+        self.workerResourceName = workerResourceName
+    }
 
     public func state(for sessionID: String) -> OfflineJobState? { jobs[sessionID] }
 
@@ -67,9 +85,10 @@ public final class OfflineJobCoordinator: ObservableObject {
     public func prepare(sessionDir: URL, config: OfflineJobConfig) async throws -> OfflineJobState {
         let store = OfflineJobStore(sessionDir: sessionDir)
         let state: OfflineJobState
+        let expectedConfigID = offlineConfigID(engine: config.engine, model: config.model)
         if FileManager.default.fileExists(atPath: store.stateURL.path),
            let existing = try? store.recover(),
-           existing.schemaVersion == 1, existing.configID == offlineConfigID {
+           existing.schemaVersion == 1, existing.configID == expectedConfigID {
             state = existing
         } else {
             state = try await store.create(config: config)
@@ -82,7 +101,7 @@ public final class OfflineJobCoordinator: ObservableObject {
         do {
             var state = try await prepare(sessionDir: sessionDir, config: config)
             state.status = .failed
-            state.lastError = "Local Whisper setup is required."
+            state.lastError = "Local transcription runtime setup is required."
             try OfflineJobStore(sessionDir: sessionDir).save(state)
             jobs[state.sessionID] = state
         } catch { }
@@ -101,7 +120,7 @@ public final class OfflineJobCoordinator: ObservableObject {
     public func start(sessionDir: URL, config: OfflineJobConfig) async throws {
         guard runtime.state == .ready else { throw OfflineCoordinatorError.runtimeNotReady }
         guard process == nil else { throw OfflineCoordinatorError.jobAlreadyRunning }
-        guard let worker = Bundle.module.url(forResource: "offline_worker", withExtension: "py") else {
+        guard let worker = Bundle.module.url(forResource: workerResourceName, withExtension: "py") else {
             throw OfflineCoordinatorError.workerMissing
         }
 

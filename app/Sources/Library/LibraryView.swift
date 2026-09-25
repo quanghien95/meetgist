@@ -24,7 +24,7 @@ struct LibraryView: View {
     /// different meeting is being recorded.
     private func isProcessing(_ meeting: Meeting) -> Bool {
         guard state.state == .processing else { return false }
-        if let active = state.offlineCoordinator.activeSessionID { return meeting.id == active }
+        if let active = state.activeOfflineCoordinator.activeSessionID { return meeting.id == active }
         return meeting.id == state.selectedID
     }
 
