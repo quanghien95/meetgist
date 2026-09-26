@@ -109,6 +109,14 @@ notes failure (quota, network, bad model name) leaves the transcript on disk
 and the meeting can be retried from Generate, the same contract the offline
 path already had.
 
+Every cloud HTTP call goes through `HTTPRetry` (MeetGistKit): HTTP 408/429/5xx
+and transient network errors are retried up to 3 times with exponential backoff
+and jitter (honoring `Retry-After`, capped at 30 s), reported through the
+normal progress text. Other 4xx errors fail immediately. Long model calls
+(generate, chat, transcribe) never retry a client-side timeout, since the
+provider may still be processing — and billing — that request. Backoff sleeps
+stop promptly on cancellation.
+
 ### Offline transcription (MLX Whisper, Qwen3-ASR)
 
 Each offline engine has its own runtime manager (`OfflineRuntimeManager`,

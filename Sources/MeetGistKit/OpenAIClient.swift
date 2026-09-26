@@ -14,13 +14,6 @@ struct OpenAIHTTP: Sendable {
         return req
     }
 
-    private func ensureOK(_ resp: URLResponse, _ data: Data) throws {
-        guard let http = resp as? HTTPURLResponse else { return }
-        guard (200..<300).contains(http.statusCode) else {
-            throw PipelineError.http(http.statusCode, String((String(data: data, encoding: .utf8) ?? "").prefix(400)))
-        }
-    }
-
     // MARK: STT (/audio/transcriptions)
 
     struct Verbose: Decodable {
@@ -29,7 +22,7 @@ struct OpenAIHTTP: Sendable {
         struct Seg: Decodable { let start: Double?; let text: String? }
     }
 
-    func transcribeFile(_ url: URL, model: String) async throws -> Verbose {
+    func transcribeFile(_ url: URL, model: String, progress: (@Sendable (String) -> Void)? = nil) async throws -> Verbose {
         let boundary = "meetgist.\(UUID().uuidString)"
         var req = authed("/audio/transcriptions")
         req.httpMethod = "POST"
@@ -38,8 +31,12 @@ struct OpenAIHTTP: Sendable {
             boundary: boundary,
             fields: ["model": model, "response_format": "verbose_json"],
             fileField: "file", fileURL: url, mime: AudioTools.mimeType(for: url))
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try ensureOK(resp, data)
+        let requestToSend = req
+        let data = try await HTTPRetry.withRetry(label: model, policy: .modelCall, progress: progress) { () -> Data in
+            let (d, resp) = try await URLSession.shared.data(for: requestToSend)
+            try HTTPRetry.ensureOK(resp, d)
+            return d
+        }
         // Some providers return plain text for verbose_json on small clips; fall back.
         if let v = try? JSONDecoder().decode(Verbose.self, from: data) { return v }
         return Verbose(text: String(data: data, encoding: .utf8), segments: nil)
@@ -52,7 +49,7 @@ struct OpenAIHTTP: Sendable {
         let choices: [Choice]?
     }
 
-    func chat(model: String, system: String, user: String) async throws -> String {
+    func chat(model: String, system: String, user: String, progress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         var req = authed("/chat/completions")
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -64,9 +61,12 @@ struct OpenAIHTTP: Sendable {
                 ["role": "user", "content": user],
             ],
         ])
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try ensureOK(resp, data)
-        let decoded = try JSONDecoder().decode(ChatResp.self, from: data)
+        let requestToSend = req
+        let decoded = try await HTTPRetry.withRetry(label: model, policy: .modelCall, progress: progress) { () -> ChatResp in
+            let (d, resp) = try await URLSession.shared.data(for: requestToSend)
+            try HTTPRetry.ensureOK(resp, d)
+            return try JSONDecoder().decode(ChatResp.self, from: d)
+        }
         let text = decoded.choices?.first?.message?.content ?? ""
         if text.isEmpty { throw PipelineError.badResponse("empty chat output") }
         return text
@@ -115,7 +115,7 @@ struct WhisperTranscriber: Transcriber {
                 t.url, chunkSeconds: kMeetGistChunkSeconds,
                 workDir: work.appendingPathComponent(t.speaker))
             for c in chunks {
-                let v = try await http.transcribeFile(c.url, model: model)
+                let v = try await http.transcribeFile(c.url, model: model, progress: progress)
                 if let segs = v.segments, !segs.isEmpty {
                     for s in segs {
                         let text = (s.text ?? "").trimmingCharacters(in: .whitespaces)
@@ -146,11 +146,11 @@ struct ChatNotesWriter: NotesWriter {
         progress("Writing minutes & summary…")
         let http = OpenAIHTTP(apiKey: apiKey, base: baseURL)
         if let t = template, !t.isEmpty {
-            let out = try await http.chat(model: model, system: Prompts.templatedNotes(t, language: language), user: transcript)
+            let out = try await http.chat(model: model, system: Prompts.templatedNotes(t, language: language), user: transcript, progress: progress)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return (out, out)
         }
-        let raw = try await http.chat(model: model, system: Prompts.polished(language: language), user: transcript)
+        let raw = try await http.chat(model: model, system: Prompts.polished(language: language), user: transcript, progress: progress)
         return splitPolished(raw)
     }
 }
