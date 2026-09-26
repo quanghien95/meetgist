@@ -170,7 +170,7 @@ public final class LocalNotesRuntimeManager: ObservableObject {
                 throw LocalNotesRuntimeError("Bundled Qwen requirements are missing.")
             }
             try await run(pythonURL.path, ["-m", "pip", "install", "--disable-pip-version-check",
-                                           "--no-input", "-r", requirements.path])
+                                           "--no-input", "--require-hashes", "-r", requirements.path])
 
             installDetail = "Downloading \(Self.activeModel.displayLabel)…"
             installProgress = 0.48

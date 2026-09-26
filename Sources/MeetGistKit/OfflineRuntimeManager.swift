@@ -100,7 +100,7 @@ public final class OfflineRuntimeManager: ObservableObject {
                 throw RuntimeError("Bundled offline requirements are missing.")
             }
             try await run(pythonURL.path, ["-m", "pip", "install", "--disable-pip-version-check",
-                                           "--no-input", "-r", requirements.path])
+                                           "--no-input", "--require-hashes", "-r", requirements.path])
 
             installDetail = "Downloading MLX Whisper Large V3…"
             installProgress = 0.62

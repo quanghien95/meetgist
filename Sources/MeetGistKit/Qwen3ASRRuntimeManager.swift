@@ -12,10 +12,13 @@ public final class Qwen3ASRRuntimeManager: ObservableObject {
     public static let pythonVersion = "3.11.16"
     public static let pythonBuild = "20260814"
     public static let mlxAudioVersion = "0.5.6"
-    public static let mlxVersion = "0.32.1"
-    /// Total repository file bytes for the 4-bit model. Settings rounds this
-    /// using decimal units; the Python runtime and packages are additional.
-    public static let modelDownloadBytes: Int64 = 1_650_000_000
+    public static let mlxVersion = "0.32.2"
+    /// Exact pinned revision (commit sha) for mlx-community/Qwen3-ASR-1.7B-4bit
+    /// — never a moving branch, so installs are reproducible.
+    public static let modelRevision = "78a389c776a5483b2d0d4ea5494e11012e0d6159"
+    /// Total repository file bytes at the pinned model revision. Settings rounds
+    /// this using decimal units; the Python runtime and packages are additional.
+    public static let modelDownloadBytes: Int64 = 1_607_633_106
     public static let pythonArchiveSHA256 = "fcba9f3f676c83e07225e38116649f0c6eb94cb4fcc166632cf92769462b6e39"
     public static var isSupported: Bool {
 #if arch(arm64)
@@ -96,14 +99,14 @@ public final class Qwen3ASRRuntimeManager: ObservableObject {
                 throw RuntimeError("Bundled offline requirements are missing.")
             }
             try await run(pythonURL.path, ["-m", "pip", "install", "--disable-pip-version-check",
-                                           "--no-input", "-r", requirements.path])
+                                           "--no-input", "--require-hashes", "-r", requirements.path])
 
             installDetail = "Downloading Qwen3-ASR 1.7B…"
             installProgress = 0.62
             let script = """
             import sys
             from huggingface_hub import snapshot_download
-            snapshot_download(repo_id='mlx-community/Qwen3-ASR-1.7B-4bit', local_dir=sys.argv[1])
+            snapshot_download(repo_id='mlx-community/Qwen3-ASR-1.7B-4bit', revision='\(Self.modelRevision)', local_dir=sys.argv[1])
             """
             try await run(pythonURL.path, ["-c", script, modelURL.path])
 
@@ -113,6 +116,7 @@ public final class Qwen3ASRRuntimeManager: ObservableObject {
                 "mlx_audio": Self.mlxAudioVersion,
                 "mlx": Self.mlxVersion,
                 "model": "mlx-community/Qwen3-ASR-1.7B-4bit",
+                "model_revision": Self.modelRevision,
             ]
             let markerData = try JSONSerialization.data(withJSONObject: marker, options: [.prettyPrinted, .sortedKeys])
             try markerData.write(to: markerURL, options: .atomic)
