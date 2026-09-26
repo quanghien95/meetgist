@@ -17,10 +17,19 @@ struct GeminiHTTP: Sendable {
         let candidates: [Candidate]?
     }
 
+    /// A request against `base` authenticated via the `x-goog-api-key` header
+    /// (not a `?key=` query parameter, which is more likely to end up in logs,
+    /// proxies, or crash reports). See P2-1.
+    func authed(_ path: String) -> URLRequest {
+        var req = URLRequest(url: URL(string: "\(base)\(path)")!)
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        return req
+    }
+
     func upload(_ url: URL) async throws -> (uri: String, mime: String) {
         let data = try Data(contentsOf: url)
         let mime = AudioTools.mimeType(for: url)
-        var start = URLRequest(url: URL(string: "\(base)/upload/v1beta/files?key=\(apiKey)")!)
+        var start = authed("/upload/v1beta/files")
         start.httpMethod = "POST"
         start.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
         start.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")
@@ -33,6 +42,9 @@ struct GeminiHTTP: Sendable {
               let uploadURL = http.value(forHTTPHeaderField: "X-Goog-Upload-URL")
         else { throw PipelineError.badResponse("no upload URL from Gemini") }
 
+        // The upload URL Google returns is itself pre-authenticated (a
+        // one-time resumable-session URL) — it never carried our API key
+        // either way, so there is nothing to move off it here.
         var up = URLRequest(url: URL(string: uploadURL)!)
         up.httpMethod = "POST"
         up.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
@@ -46,8 +58,7 @@ struct GeminiHTTP: Sendable {
         while (info.state ?? "") == "PROCESSING", waited < 180 {
             try await Task.sleep(nanoseconds: 1_000_000_000); waited += 1
             guard let name = info.name else { break }
-            let (gData, gResp) = try await URLSession.shared.data(
-                from: URL(string: "\(base)/v1beta/\(name)?key=\(apiKey)")!)
+            let (gData, gResp) = try await URLSession.shared.data(for: authed("/v1beta/\(name)"))
             try ensureOK(gResp, gData)
             info = try JSONDecoder().decode(FileInfo.self, from: gData)
         }
@@ -60,7 +71,7 @@ struct GeminiHTTP: Sendable {
             "contents": [["role": "user", "parts": parts]],
             "generationConfig": ["temperature": 0.2],
         ]
-        var req = URLRequest(url: URL(string: "\(base)/v1beta/models/\(model):generateContent?key=\(apiKey)")!)
+        var req = authed("/v1beta/models/\(model):generateContent")
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)

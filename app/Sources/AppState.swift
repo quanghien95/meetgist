@@ -13,6 +13,28 @@ enum Presence: String { case menuBar, mini }
 enum HUDKind { case recording, stopped, processing, done, error }
 struct HUDEvent { let kind: HUDKind; let text: String }
 
+/// Which pipeline slot a per-provider model override applies to. Raw values
+/// are exactly the strings already persisted in UserDefaults keys — do not
+/// rename without a migration (see `AppState.Keys.modelOverride`).
+enum ProviderModelSlot: String { case transcribe, notes }
+
+/// Whether the selected notes provider can currently generate minutes, and the
+/// exact user-visible strings to show when it can't. Keeping this the one
+/// place that checks local-runtime/on-device readiness means
+/// `canGenerateMinutes`, `setupRequiredStatus`, and `generateMinutes`'s error
+/// branch can't drift from each other or from the switch over `NotesStyle`.
+struct NotesReadiness {
+    let isReady: Bool
+    /// Message used by `setupRequiredStatus`.
+    let setupMessage: String
+    /// `status` used by `generateMinutes` when this provider isn't ready.
+    let unavailableStatus: String
+    /// `lastError` used by `generateMinutes` when this provider isn't ready;
+    /// nil means leave `lastError` untouched (today's behavior for the
+    /// key-requiring cloud styles).
+    let unavailableError: String?
+}
+
 @MainActor
 final class AppState: ObservableObject {
     // Recording
@@ -33,8 +55,7 @@ final class AppState: ObservableObject {
     @Published var outputDir: URL {
         didSet {
             persistOutput(); refresh()
-            offlineCoordinator.scan(outputDir: outputDir)
-            qwenASRCoordinator.scan(outputDir: outputDir)
+            scanOfflineCoordinators()
         }
     }
     @Published var presence: Presence { didSet { UserDefaults.standard.set(presence.rawValue, forKey: Keys.presence) } }
@@ -69,10 +90,20 @@ final class AppState: ObservableObject {
     /// own fully independent runtime and job coordinator, so switching the
     /// provider never mixes up install state or in-flight jobs between them.
     private var activeOfflineRuntime: any OfflineTranscriptionRuntime {
-        transcriptionProviderID == "offline-qwen3-asr" ? qwenASRRuntime : offlineRuntime
+        transcriptionProviderID == ProviderCatalog.offlineQwen3ASRID ? qwenASRRuntime : offlineRuntime
     }
     var activeOfflineCoordinator: OfflineJobCoordinator {
-        transcriptionProviderID == "offline-qwen3-asr" ? qwenASRCoordinator : offlineCoordinator
+        transcriptionProviderID == ProviderCatalog.offlineQwen3ASRID ? qwenASRCoordinator : offlineCoordinator
+    }
+
+    /// Scans both offline coordinators, excluding whichever session(s) are
+    /// currently active on either one from BOTH scans — so, say, deleting an
+    /// unrelated meeting (`moveMeetingToTrash`) can never race a scan against
+    /// the folder either coordinator is actively transcribing into. See P0-5.
+    private func scanOfflineCoordinators() {
+        let active = Set([offlineCoordinator.activeSessionID, qwenASRCoordinator.activeSessionID].compactMap { $0 })
+        offlineCoordinator.scan(outputDir: outputDir, excluding: active)
+        qwenASRCoordinator.scan(outputDir: outputDir, excluding: active)
     }
 
     /// Set by the app so AppState can flash the HUD on transitions.
@@ -87,6 +118,18 @@ final class AppState: ObservableObject {
     @Published var processStep = 0   // 0 = transcribing, 1 = summarizing
     private var processTask: Task<Void, Never>?
     private var localNotesTaskActive = false
+    /// Bumped by `nextProcessGeneration()` whenever a new recording start or an
+    /// explicit cancel makes the currently in-flight `processTask` stale. Every
+    /// completion/catch path that mutates `state`/`status`/`lastError`/
+    /// `processStep`/`hud` first checks its captured token against this so a
+    /// job that hasn't noticed cancellation yet can never stomp whatever
+    /// replaced it (recording, or a newer job) — see P0-2.
+    private var processGeneration = 0
+    @discardableResult
+    private func nextProcessGeneration() -> Int {
+        processGeneration += 1
+        return processGeneration
+    }
     private var recorder: SessionRecorder?
     private var ticker: AnyCancellable?
     private var startDate: Date?
@@ -101,6 +144,17 @@ final class AppState: ObservableObject {
         static let offlineLanguage = "MeetGistOfflineLanguage", offlineVocabulary = "MeetGistOfflineVocabulary"
         static let detectMeetings = "MeetGistDetectMeetings", postProcessEnabled = "MeetGistPostProcessEnabled", postProcessSource = "MeetGistPostProcessSource"
         static let autoGenerateNotes = "MeetGistAutoGenerateNotes"
+
+        /// Per-provider model override key, e.g. "model.gemini.transcribe".
+        /// Exact same string shape as before this was declared here — existing
+        /// user settings must keep working.
+        static func modelOverride(providerID: String, slot: ProviderModelSlot) -> String {
+            "model.\(providerID).\(slot.rawValue)"
+        }
+        /// Codex CLI reasoning-effort override key, e.g. "model.codex-cli.notes-effort".
+        static func codexEffort(providerID: String) -> String {
+            "model.\(providerID).notes-effort"
+        }
     }
 
     init() {
@@ -139,8 +193,7 @@ final class AppState: ObservableObject {
         // main actor internally so launch shows the window immediately instead
         // of blocking on however many meetings exist.
         refresh()
-        offlineCoordinator.scan(outputDir: outputDir)
-        qwenASRCoordinator.scan(outputDir: outputDir)
+        scanOfflineCoordinators()
     }
 
     // MARK: Providers (v1.1)
@@ -152,51 +205,86 @@ final class AppState: ObservableObject {
     var notesProvider: Provider { provider(notesProviderID) ?? ProviderCatalog.builtIn[0] }
     func effective(_ p: Provider) -> Provider {
         var e = p; let d = UserDefaults.standard
-        if let m = d.string(forKey: "model.\(p.id).transcribe"), !m.isEmpty { e.transcribeModel = m }
-        if let m = d.string(forKey: "model.\(p.id).notes"), !m.isEmpty { e.notesModel = m }
-        if p.notesStyle == "codex-cli",
-           let effort = d.string(forKey: "model.\(p.id).notes-effort"), !effort.isEmpty {
+        if let m = d.string(forKey: Keys.modelOverride(providerID: p.id, slot: .transcribe)), !m.isEmpty { e.transcribeModel = m }
+        if let m = d.string(forKey: Keys.modelOverride(providerID: p.id, slot: .notes)), !m.isEmpty { e.notesModel = m }
+        if p.notesStyle == .codexCLI,
+           let effort = d.string(forKey: Keys.codexEffort(providerID: p.id)), !effort.isEmpty {
             e.notesReasoningEffort = effort
         }
         return e
     }
     func key(for p: Provider) -> String? { Keychain.get(p.keyAccount) }
     func hasKey(_ p: Provider) -> Bool {
-        p.transcribeStyle == "offline" || p.notesStyle == "apple"
-            || p.notesStyle == "qwen-mlx" || p.notesStyle == "codex-cli"
-            || Keychain.get(p.keyAccount) != nil
+        !p.needsAPIKey || Keychain.get(p.keyAccount) != nil
     }
-    func saveKey(_ k: String, for p: Provider) { Keychain.set(k.trimmingCharacters(in: .whitespacesAndNewlines), for: p.keyAccount); refreshKeyFlag() }
-    func setModel(_ m: String, for p: Provider, slot: String) { UserDefaults.standard.set(m.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "model.\(p.id).\(slot)"); objectWillChange.send() }
-    func modelOverride(_ p: Provider, slot: String) -> String { UserDefaults.standard.string(forKey: "model.\(p.id).\(slot)") ?? "" }
+    func saveKey(_ k: String, for p: Provider) {
+        do {
+            try Keychain.set(k.trimmingCharacters(in: .whitespacesAndNewlines), for: p.keyAccount)
+        } catch {
+            lastError = error.localizedDescription
+            status = "Could not save the API key."
+        }
+        refreshKeyFlag()
+    }
+    func setModel(_ m: String, for p: Provider, slot: ProviderModelSlot) {
+        UserDefaults.standard.set(m.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  forKey: Keys.modelOverride(providerID: p.id, slot: slot))
+        objectWillChange.send()
+    }
+    func modelOverride(_ p: Provider, slot: ProviderModelSlot) -> String {
+        UserDefaults.standard.string(forKey: Keys.modelOverride(providerID: p.id, slot: slot)) ?? ""
+    }
     func setCodexReasoningEffort(_ effort: String, for p: Provider) {
-        UserDefaults.standard.set(effort, forKey: "model.\(p.id).notes-effort")
+        UserDefaults.standard.set(effort, forKey: Keys.codexEffort(providerID: p.id))
         objectWillChange.send()
     }
     func codexReasoningEffort(for p: Provider) -> String {
-        UserDefaults.standard.string(forKey: "model.\(p.id).notes-effort") ?? (p.notesReasoningEffort ?? "none")
+        UserDefaults.standard.string(forKey: Keys.codexEffort(providerID: p.id)) ?? (p.notesReasoningEffort ?? "none")
     }
-    func addCustomProvider() { customProviders.append(ProviderCatalog.newCustom(id: "custom-\(customProviders.count + 1)-\(UInt8.random(in: 0...255))")) }
+    // A UUID keeps every id unique regardless of how many custom providers
+    // exist or have been removed; existing ids are untouched. See P3.
+    func addCustomProvider() { customProviders.append(ProviderCatalog.newCustom(id: "custom-\(UUID().uuidString)")) }
     func updateCustom(_ p: Provider) { if let i = customProviders.firstIndex(where: { $0.id == p.id }) { customProviders[i] = p } }
     func removeCustom(_ p: Provider) { customProviders.removeAll { $0.id == p.id }; if transcriptionProviderID == p.id { transcriptionProviderID = "gemini" }; if notesProviderID == p.id { notesProviderID = "gemini" } }
-    var usesOfflineTranscription: Bool { transcriptionProvider.transcribeStyle == "offline" }
-    var usesLocalNotes: Bool {
-        notesProvider.notesStyle == "apple" || notesProvider.notesStyle == "qwen-mlx"
-    }
+    var usesOfflineTranscription: Bool { transcriptionProvider.transcribeStyle?.isLocal ?? false }
+    var usesLocalNotes: Bool { notesProvider.notesStyle?.isOnDevice ?? false }
     var canStartTranscription: Bool {
         usesOfflineTranscription ? activeOfflineRuntime.state == .ready : hasKey(transcriptionProvider)
     }
-    var canGenerateMinutes: Bool {
-        switch notesProvider.notesStyle {
-        case "apple": return AppleFoundationModelsSupport.availability.isReady
-        case "qwen-mlx": return localNotesRuntime.state == .ready
-        case "codex-cli": return CodexCLIAvailability.isInstalled
-        default: return hasKey(notesProvider)
+    /// The one place that checks readiness for a notes style that depends on
+    /// an app runtime manager (Local Qwen install state, Apple availability,
+    /// Codex CLI installed) — `canGenerateMinutes`, `setupRequiredStatus`, and
+    /// `generateMinutes`'s error branch all read from this instead of each
+    /// re-implementing their own switch. No `default:` case, so adding a
+    /// `NotesStyle` case forces updating this switch.
+    private func notesReadiness(for provider: Provider) -> NotesReadiness {
+        switch provider.notesStyle {
+        case .apple:
+            let availability = AppleFoundationModelsSupport.availability
+            return NotesReadiness(isReady: availability.isReady,
+                                   setupMessage: availability.message,
+                                   unavailableStatus: "Apple On-Device is unavailable.",
+                                   unavailableError: availability.message)
+        case .qwenMLX:
+            return NotesReadiness(isReady: localNotesRuntime.state == .ready,
+                                   setupMessage: "Install Local Qwen Notes in Settings.",
+                                   unavailableStatus: "Local Qwen Notes is not installed.",
+                                   unavailableError: "Install Qwen3 4B in Settings → AI Provider.")
+        case .codexCLI:
+            return NotesReadiness(isReady: CodexCLIAvailability.isInstalled,
+                                   setupMessage: "Install Codex CLI and run `codex login` in a terminal first.",
+                                   unavailableStatus: "Codex CLI is not available.",
+                                   unavailableError: "Install Codex CLI and run `codex login` in a terminal first.")
+        case .gemini, .chat, nil:
+            return NotesReadiness(isReady: hasKey(provider),
+                                   setupMessage: "Add an API key for the Notes provider.",
+                                   unavailableStatus: "Add an API key for the Notes provider.",
+                                   unavailableError: nil)
         }
     }
+    var canGenerateMinutes: Bool { notesReadiness(for: notesProvider).isReady }
     var offlineConfig: OfflineJobConfig {
-        let engine = transcriptionProviderID == "offline-qwen3-asr" ? qwenASREngine : offlineEngine
-        let model = transcriptionProviderID == "offline-qwen3-asr" ? qwenASRModel : offlineModel
+        let (engine, model) = ProviderCatalog.offlineEngineConfig(for: transcriptionProviderID)
         return OfflineJobConfig(engine: engine, model: model, language: offlineLanguage, vocabulary: offlineVocabulary)
     }
     /// A meeting may have been transcribed by either local engine, independent
@@ -207,12 +295,7 @@ final class AppState: ObservableObject {
     private func refreshKeyFlag() { hasKeys = canStartTranscription && canGenerateMinutes }
     private var setupRequiredStatus: String {
         if !canStartTranscription { return "Add an API key for the Transcription provider." }
-        switch notesProvider.notesStyle {
-        case "qwen-mlx": return "Install Local Qwen Notes in Settings."
-        case "apple": return AppleFoundationModelsSupport.availability.message
-        case "codex-cli": return "Install Codex CLI and run `codex login` in a terminal first."
-        default: return "Add an API key for the Notes provider."
-        }
+        return notesReadiness(for: notesProvider).setupMessage
     }
     private func saveCustom() { if let data = try? JSONEncoder().encode(customProviders) { UserDefaults.standard.set(data, forKey: Keys.custom) }; refreshKeyFlag() }
 
@@ -259,19 +342,26 @@ final class AppState: ObservableObject {
     }
 
     private func startRecording() async {
-        // Recording has absolute priority over the local worker. Cancellation of
-        // the active Swift task prevents its completion handler racing recording.
-        // Either local engine's coordinator could have an active job.
+        // Recording has absolute priority over any in-flight local/cloud job.
+        // Bump the generation first so a job that hasn't noticed cancellation
+        // yet can never mutate state on our behalf once it does finish.
+        nextProcessGeneration()
+        // Either local engine's coordinator could have an active job; stop its
+        // subprocess directly (cancelling the Swift task alone doesn't stop it).
         if offlineCoordinator.activeSessionID != nil {
-            processTask?.cancel()
             await offlineCoordinator.stopForRecording()
         } else if qwenASRCoordinator.activeSessionID != nil {
-            processTask?.cancel()
             await qwenASRCoordinator.stopForRecording()
-        } else if localNotesTaskActive {
-            processTask?.cancel()
-            await processTask?.value
         }
+        // Cancel and await ANY in-flight process task — cloud transcribe/notes,
+        // notes-only generate/regenerate, or a post-process script run — so its
+        // resources are released before a new SessionRecorder is constructed.
+        if let task = processTask {
+            task.cancel()
+            await task.value
+            processTask = nil
+        }
+        localNotesTaskActive = false
         // Request the permissions the recorders need, with MeetGist's usage strings,
         // before touching the capture APIs. Mic blocks on the user's choice; Screen
         // Recording prompts if needed (system audio stays empty until it's granted +
@@ -287,6 +377,10 @@ final class AppState: ObservableObject {
             startTicker()
             hud?(HUDEvent(kind: .recording, text: "REC"))
         } catch {
+            // A half-started recorder (e.g. system audio started, mic failed —
+            // SessionRecorder.start() already stops system in that case) must
+            // not stay referenced. See P0-6.
+            recorder = nil
             state = .error; lastError = error.localizedDescription; status = "Couldn't start"
             hud?(HUDEvent(kind: .error, text: "Error"))
         }
@@ -335,9 +429,11 @@ final class AppState: ObservableObject {
     private func processCloud(_ dir: URL) {
         guard hasKeys else { state = .idle; status = "Recorded. \(setupRequiredStatus)"; return }
         processTask?.cancel()
+        let generation = nextProcessGeneration()
         state = .processing; processStep = 0; status = "Transcribing…"
         hud?(HUDEvent(kind: .processing, text: "…"))
         localNotesTaskActive = usesLocalNotes
+        let jobStart = Date()
         processTask = Task { [weak self] in
             guard let self else { return }
             defer { self.localNotesTaskActive = false }
@@ -350,24 +446,51 @@ final class AppState: ObservableObject {
                 let generateNotes = self.autoGenerateNotes
                 _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline, generateNotes: generateNotes) { msg in
                     Task { @MainActor in
+                        guard self.processGeneration == generation else { return }
                         self.status = msg
                         if msg.localizedCaseInsensitiveContains("minute") || msg.localizedCaseInsensitiveContains("summar") { self.processStep = 1 }
                     }
                 }
                 try Task.checkCancellation()
+                guard self.processGeneration == generation else { return }
                 self.refresh()
-                if generateNotes { try await self.runPostProcessIfEnabled(for: dir) }
+                if generateNotes { try await self.runPostProcessIfEnabled(for: dir, generation: generation) }
+                guard self.processGeneration == generation else { return }
                 self.state = .idle; self.status = generateNotes ? "Notes ready." : "Transcript ready."
                 self.hud?(HUDEvent(kind: .done, text: "Done"))
             } catch is CancellationError {
+                guard self.processGeneration == generation else { return }
                 self.state = .idle; self.status = "Canceled."
             } catch let e as URLError where e.code == .cancelled {
+                guard self.processGeneration == generation else { return }
                 self.state = .idle; self.status = "Canceled."
             } catch {
-                self.state = .error; self.lastError = error.localizedDescription; self.status = "Notes failed"
+                guard self.processGeneration == generation else { return }
+                // Stage 1 (transcribe) writes transcript.md before stage 2 (notes)
+                // ever runs (see MeetingProcessor.process). If that file exists
+                // and was written by this job, the transcript survived and only
+                // notes failed — surface that distinctly and refresh so the
+                // meeting shows the transcript with a working Generate button.
+                if Self.transcriptWasWritten(in: dir, after: jobStart) {
+                    self.refresh()
+                    self.state = .error; self.lastError = error.localizedDescription
+                    self.status = "Transcript saved — notes failed"
+                } else {
+                    self.state = .error; self.lastError = error.localizedDescription; self.status = "Notes failed"
+                }
                 self.hud?(HUDEvent(kind: .error, text: "Failed"))
             }
         }
+    }
+
+    /// True if `transcript.md` exists and was (re)written after `since` — tells
+    /// "transcription itself failed" apart from "the transcript was persisted
+    /// but the notes stage after it failed" in `processCloud`'s error path.
+    private static func transcriptWasWritten(in dir: URL, after since: Date) -> Bool {
+        let url = dir.appendingPathComponent("transcript.md")
+        guard let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        else { return false }
+        return mtime >= since
     }
 
     private func processOffline(_ dir: URL) {
@@ -387,6 +510,7 @@ final class AppState: ObservableObject {
             return
         }
         processTask?.cancel()
+        let generation = nextProcessGeneration()
         state = .processing; processStep = 0; status = "Starting local transcription…"
         hud?(HUDEvent(kind: .processing, text: "…"))
         let coordinator = activeOfflineCoordinator
@@ -396,6 +520,7 @@ final class AppState: ObservableObject {
                 try await coordinator.start(sessionDir: dir, config: self.offlineConfig)
                 while coordinator.activeSessionID != nil {
                     try Task.checkCancellation()
+                    guard self.processGeneration == generation else { return }
                     if let job = coordinator.state(for: dir.lastPathComponent) {
                         let percent = Int(job.progress.fraction * 100)
                         self.status = "Local transcription \(percent)%"
@@ -403,6 +528,7 @@ final class AppState: ObservableObject {
                     try await Task.sleep(for: .milliseconds(500))
                 }
                 try Task.checkCancellation()
+                guard self.processGeneration == generation else { return }
                 let job = coordinator.state(for: dir.lastPathComponent)
                 switch job?.status {
                 case .completed:
@@ -416,10 +542,12 @@ final class AppState: ObservableObject {
                     }
                     self.processStep = 1; self.status = "Writing minutes & summary…"
                     self.localNotesTaskActive = self.usesLocalNotes
-                    try await self.generateMinutesStage(dir)
+                    try await self.generateMinutesStage(dir, generation: generation)
                     self.localNotesTaskActive = false
+                    guard self.processGeneration == generation else { return }
                     self.refresh()
-                    try await self.runPostProcessIfEnabled(for: dir)
+                    try await self.runPostProcessIfEnabled(for: dir, generation: generation)
+                    guard self.processGeneration == generation else { return }
                     self.state = .idle; self.status = "Notes ready."
                     self.hud?(HUDEvent(kind: .done, text: "Done"))
                 case .paused: self.state = .idle; self.status = "Local transcription paused."
@@ -433,6 +561,7 @@ final class AppState: ObservableObject {
                 // Recording startup owns the visible state after it requests stop.
             } catch {
                 self.localNotesTaskActive = false
+                guard self.processGeneration == generation else { return }
                 self.state = .error; self.lastError = error.localizedDescription
                 self.status = "Local transcription failed"
             }
@@ -459,8 +588,13 @@ final class AppState: ObservableObject {
     }
     func cancelProcessing() {
         processTask?.cancel()
+        let generation = nextProcessGeneration()
         if let active = [offlineCoordinator, qwenASRCoordinator].first(where: { $0.activeSessionID != nil }) {
-            Task { await active.cancel(); state = .idle; status = "Canceled." }
+            Task { [weak self] in
+                await active.cancel()
+                guard let self, self.processGeneration == generation else { return }
+                self.state = .idle; self.status = "Canceled."
+            }
         } else { state = .idle; status = "Canceled." }
     }
 
@@ -470,49 +604,47 @@ final class AppState: ObservableObject {
             return
         }
         guard canGenerateMinutes else {
-            if notesProvider.notesStyle == "apple" {
-                let availability = AppleFoundationModelsSupport.availability
-                lastError = availability.message
-                status = "Apple On-Device is unavailable."
-            } else if notesProvider.notesStyle == "qwen-mlx" {
-                lastError = "Install Qwen3 4B in Settings → AI Provider."
-                status = "Local Qwen Notes is not installed."
-            } else if notesProvider.notesStyle == "codex-cli" {
-                lastError = "Install Codex CLI and run `codex login` in a terminal first."
-                status = "Codex CLI is not available."
-            } else {
-                status = "Add an API key for the Notes provider."
-            }
+            let readiness = notesReadiness(for: notesProvider)
+            if let error = readiness.unavailableError { lastError = error }
+            status = readiness.unavailableStatus
             return
         }
         processTask?.cancel()
+        let generation = nextProcessGeneration()
         state = .processing; processStep = 1; status = "Writing minutes & summary…"
         localNotesTaskActive = usesLocalNotes
         processTask = Task { [weak self] in
             guard let self else { return }
             defer { self.localNotesTaskActive = false }
             do {
-                try await self.generateMinutesStage(dir)
+                try await self.generateMinutesStage(dir, generation: generation)
                 try Task.checkCancellation()
+                guard self.processGeneration == generation else { return }
                 self.refresh()
-                try await self.runPostProcessIfEnabled(for: dir)
+                try await self.runPostProcessIfEnabled(for: dir, generation: generation)
+                guard self.processGeneration == generation else { return }
                 self.state = .idle; self.status = "Minutes ready."
             } catch is CancellationError {
+                guard self.processGeneration == generation else { return }
                 self.state = .idle; self.status = "Canceled."
             } catch {
+                guard self.processGeneration == generation else { return }
                 self.state = .error; self.lastError = error.localizedDescription; self.status = "Minutes failed"
             }
         }
     }
 
-    private func generateMinutesStage(_ dir: URL) async throws {
+    private func generateMinutesStage(_ dir: URL, generation: Int) async throws {
         let provider = effective(notesProvider)
         let template = (useTemplate && !notesTemplate.isEmpty) ? notesTemplate : nil
         _ = try await MeetingProcessor.generateNotes(
             sessionDir: dir, notesProvider: provider, notesKey: key(for: provider),
             notesTemplate: template, notesLanguage: notesLanguage
         ) { [weak self] message in
-            Task { @MainActor in self?.status = message }
+            Task { @MainActor in
+                guard let self, self.processGeneration == generation else { return }
+                self.status = message
+            }
         }
     }
 
@@ -521,24 +653,34 @@ final class AppState: ObservableObject {
         guard !postProcessSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             status = "Add Python code in Settings first."; return
         }
+        let generation = nextProcessGeneration()
         state = .processing; status = "Running post-process script…"
         processTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let source = self.postProcessSource
-                _ = try await Task.detached { try PostProcessRunner.run(source: source, meeting: meeting) }.value
+                // Run structurally inside processTask (not Task.detached, which
+                // would drop cancellation) so cancelProcessing()/startRecording
+                // can actually stop the child process. See P0-4.
+                _ = try await PostProcessRunner.run(source: source, meeting: meeting)
+                guard self.processGeneration == generation else { return }
                 self.refresh(); self.state = .idle; self.status = "Post-process script finished."
-            } catch { self.state = .error; self.lastError = error.localizedDescription; self.status = "Post-process script failed." }
+            } catch {
+                guard self.processGeneration == generation else { return }
+                self.state = .error; self.lastError = error.localizedDescription; self.status = "Post-process script failed."
+            }
         }
     }
 
-    private func runPostProcessIfEnabled(for dir: URL) async throws {
+    private func runPostProcessIfEnabled(for dir: URL, generation: Int) async throws {
         guard postProcessEnabled, !postProcessSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         refresh()
         guard let meeting = meetings.first(where: { $0.dir == dir }) else { return }
+        guard processGeneration == generation else { return }
         status = "Running post-process script…"
         let source = postProcessSource
-        _ = try await Task.detached { try PostProcessRunner.run(source: source, meeting: meeting) }.value
+        _ = try await PostProcessRunner.run(source: source, meeting: meeting)
+        guard processGeneration == generation else { return }
         refresh()
     }
 
@@ -645,8 +787,7 @@ final class AppState: ObservableObject {
                 }
                 if self.selectedID == meeting.id { self.selectedID = nil }
                 self.refresh()
-                self.offlineCoordinator.scan(outputDir: self.outputDir)
-                self.qwenASRCoordinator.scan(outputDir: self.outputDir)
+                self.scanOfflineCoordinators()
                 self.status = "Meeting moved to Trash."
             }
         }

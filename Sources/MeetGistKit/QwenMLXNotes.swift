@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import Foundation
-import Darwin
 
 struct QwenNotesRequest: Codable, Sendable {
     let transcript: String
@@ -131,11 +130,7 @@ private struct QwenMLXProcessGenerator: QwenMLXGenerating {
         defer { try? fm.removeItem(at: temporary) }
         let requestURL = temporary.appendingPathComponent("request.json")
         let outputURL = temporary.appendingPathComponent("result.json")
-        let logURL = temporary.appendingPathComponent("worker.log")
         try JSONEncoder().encode(request).write(to: requestURL, options: .atomic)
-        fm.createFile(atPath: logURL.path, contents: nil)
-        let log = try FileHandle(forWritingTo: logURL)
-        defer { try? log.close() }
 
         let config = LocalNotesRuntimeManager.activeModel
         let process = Process()
@@ -162,30 +157,16 @@ private struct QwenMLXProcessGenerator: QwenMLXGenerating {
         environment["TRANSFORMERS_OFFLINE"] = "1"
         environment["TOKENIZERS_PARALLELISM"] = "false"
         process.environment = environment
-        process.standardOutput = log
-        process.standardError = log
 
-        let controller = QwenProcessController(process: process)
-        let status: Int32 = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                process.terminationHandler = {
-                    continuation.resume(returning: $0.terminationStatus)
-                }
-                do {
-                    try process.run()
-                    controller.didStart()
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        } onCancel: {
-            controller.cancel()
-        }
-        try Task.checkCancellation()
-        guard status == 0 else {
-            let tail = (try? String(contentsOf: logURL, encoding: .utf8))?
-                .split(separator: "\n").suffix(12).joined(separator: "\n")
-            throw PipelineError.badResponse(tail ?? "Local Qwen worker exited with status \(status)")
+        // ChildProcess drains stdout/stderr concurrently and honors
+        // cancellation (no fixed timeout here — a model load + chunked
+        // map/reduce generation can legitimately take a while).
+        let result = try await ChildProcess.run(process, keepTail: true)
+        guard result.status == 0 else {
+            let combined = String(decoding: result.stdout, as: UTF8.self)
+                + String(decoding: result.stderr, as: UTF8.self)
+            let tail = combined.split(separator: "\n").suffix(12).joined(separator: "\n")
+            throw PipelineError.badResponse(tail.isEmpty ? "Local Qwen worker exited with status \(result.status)" : tail)
         }
         guard fm.fileExists(atPath: outputURL.path) else {
             throw PipelineError.badResponse("Local Qwen worker did not produce result.json")
@@ -201,40 +182,6 @@ private struct QwenMLXProcessGenerator: QwenMLXGenerating {
             return response
         } catch {
             throw PipelineError.badResponse("Invalid Local Qwen result JSON: \(error.localizedDescription)")
-        }
-    }
-}
-
-/// Process cancellation must stop MLX before recording starts. SIGTERM gets a
-/// short grace period; SIGKILL prevents a stuck native operation from surviving.
-private final class QwenProcessController: @unchecked Sendable {
-    private let lock = NSLock()
-    private let process: Process
-    private var canceled = false
-
-    init(process: Process) { self.process = process }
-
-    func didStart() {
-        lock.lock()
-        let shouldCancel = canceled
-        lock.unlock()
-        if shouldCancel { stop() }
-    }
-
-    func cancel() {
-        lock.lock()
-        canceled = true
-        let running = process.isRunning
-        lock.unlock()
-        if running { stop() }
-    }
-
-    private func stop() {
-        process.terminate()
-        let pid = process.processIdentifier
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak process] in
-            guard let process, process.isRunning else { return }
-            Darwin.kill(pid, SIGKILL)
         }
     }
 }

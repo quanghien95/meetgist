@@ -53,7 +53,7 @@ public enum MeetingListCache {
 
 /// Lists and reads session folders under the output directory.
 public enum MeetingStore {
-    private static let titleFile = ".meeting-title"
+    static let titleFile = ".meeting-title"
 
     public static func list(in outputDir: URL) -> [Meeting] {
         let fm = FileManager.default

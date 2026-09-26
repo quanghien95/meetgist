@@ -40,6 +40,7 @@ public final class OfflineJobCoordinator: ObservableObject {
     private let workerResourceName: String
     private var process: Process?
     private var activeStore: OfflineJobStore?
+    private var activeLogHandle: FileHandle?
     private var monitorTask: Task<Void, Never>?
     private var requestedStopStatus: OfflineJobStatus?
 
@@ -58,25 +59,44 @@ public final class OfflineJobCoordinator: ObservableObject {
     /// The directory walk and per-folder state recovery are synchronous disk I/O
     /// that scale with meeting count, so they run off the main actor (mirroring
     /// `AppState.refresh()`); only the final assignment hops back to publish.
-    public func scan(outputDir: URL) {
+    ///
+    /// Uses `OfflineJobStore.recoveredView()` (read-only) rather than
+    /// `recover()`, which deletes temp files and rewrites `state.json` — a scan
+    /// has no business mutating disk for a folder it isn't actively working
+    /// on. `excludedSessionIDs` (plus this coordinator's own `activeSessionID`,
+    /// always excluded) are skipped entirely and keep whatever is already in
+    /// `jobs`, so a scan can never race — by reading stale/mid-write files, or
+    /// by overwriting fresher in-memory progress with a stale on-disk read —
+    /// the session an active worker is writing to. See P0-5.
+    public func scan(outputDir: URL, excluding excludedSessionIDs: Set<String> = []) {
+        let excluded = activeSessionID.map { excludedSessionIDs.union([$0]) } ?? excludedSessionIDs
         Task.detached(priority: .userInitiated) {
-            let recovered = Self.scanSync(outputDir: outputDir)
-            await MainActor.run { [weak self] in self?.jobs = recovered }
+            let recovered = Self.scanSync(outputDir: outputDir, excluding: excluded)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                var merged = recovered
+                for id in excluded {
+                    if let existing = self.jobs[id] { merged[id] = existing }
+                }
+                self.jobs = merged
+            }
         }
     }
 
-    private nonisolated static func scanSync(outputDir: URL) -> [String: OfflineJobState] {
+    private nonisolated static func scanSync(outputDir: URL, excluding excludedSessionIDs: Set<String>) -> [String: OfflineJobState] {
         let fm = FileManager.default
         let dirs = (try? fm.contentsOfDirectory(
             at: outputDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
         )) ?? []
         var recovered: [String: OfflineJobState] = [:]
         for url in dirs {
+            let sessionID = url.lastPathComponent
+            guard !excludedSessionIDs.contains(sessionID) else { continue }
             guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
             let store = OfflineJobStore(sessionDir: url)
             guard fm.fileExists(atPath: store.stateURL.path),
-                  let state = try? store.recover() else { continue }
-            recovered[url.lastPathComponent] = state
+                  let state = try? store.recoveredView() else { continue }
+            recovered[sessionID] = state
         }
         return recovered
     }
@@ -136,11 +156,21 @@ public final class OfflineJobCoordinator: ObservableObject {
         workerProcess.executableURL = runtime.pythonURL
         workerProcess.arguments = [worker.path, "--session-dir", sessionDir.path,
                                    "--model-dir", runtime.modelURL.path]
-        workerProcess.standardOutput = FileHandle.nullDevice
-        workerProcess.standardError = FileHandle.nullDevice
+        // Redirect stdout/stderr to a per-meeting log (opened fresh, i.e.
+        // truncated, at the start of each run) instead of /dev/null, so a
+        // worker crash leaves something to diagnose beyond just an exit code.
+        // See P2-5.
+        var logHandle: FileHandle?
         do {
+            try FileManager.default.createDirectory(at: store.transcriptionDir, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: store.workerLogURL.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: store.workerLogURL)
+            logHandle = handle
+            workerProcess.standardOutput = handle
+            workerProcess.standardError = handle
             try workerProcess.run()
         } catch {
+            try? logHandle?.close()
             state.status = .failed
             state.lastError = error.localizedDescription
             try? store.save(state)
@@ -151,6 +181,7 @@ public final class OfflineJobCoordinator: ObservableObject {
         process = workerProcess
         activeStore = store
         activeSessionID = state.sessionID
+        activeLogHandle = logHandle
         requestedStopStatus = nil
         monitorTask?.cancel()
         monitorTask = Task { [weak self] in
@@ -199,6 +230,8 @@ public final class OfflineJobCoordinator: ObservableObject {
     private func finish(process finished: Process, store: OfflineJobStore) {
         guard process === finished else { return }
         monitorTask?.cancel()
+        try? activeLogHandle?.close()
+        activeLogHandle = nil
         let state = (try? store.load()) ?? jobs[activeSessionID ?? ""]
         if var current = state {
             if let requestedStopStatus {
@@ -206,7 +239,10 @@ public final class OfflineJobCoordinator: ObservableObject {
                 current.lastError = nil
             } else if finished.terminationStatus != 0 && current.status == .transcribing {
                 current.status = .failed
-                current.lastError = "Local transcription worker exited (\(finished.terminationStatus))."
+                let tail = Self.tailOfWorkerLog(store: store)
+                current.lastError = tail.isEmpty
+                    ? "Local transcription worker exited (\(finished.terminationStatus))."
+                    : "Local transcription worker exited (\(finished.terminationStatus)):\n\(tail)"
             }
             try? store.save(current)
             jobs[current.sessionID] = current
@@ -215,5 +251,12 @@ public final class OfflineJobCoordinator: ObservableObject {
         activeStore = nil
         activeSessionID = nil
         requestedStopStatus = nil
+    }
+
+    /// Last few lines of the worker's log (bounded), included in `lastError`
+    /// on a non-zero exit so a crash leaves more than a bare exit code.
+    private static func tailOfWorkerLog(store: OfflineJobStore, maxLines: Int = 12) -> String {
+        guard let text = try? String(contentsOf: store.workerLogURL, encoding: .utf8) else { return "" }
+        return text.split(separator: "\n").suffix(maxLines).joined(separator: "\n")
     }
 }

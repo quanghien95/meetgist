@@ -76,10 +76,10 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             ProviderSlot(title: "Transcription  ·  audio → text",
                                          providers: state.transcriptionProviders,
-                                         selection: $state.transcriptionProviderID, slot: "transcribe")
+                                         selection: $state.transcriptionProviderID, slot: .transcribe)
                             ProviderSlot(title: "Notes  ·  text → minutes & summary",
                                          providers: state.notesProviders,
-                                         selection: $state.notesProviderID, slot: "notes")
+                                         selection: $state.notesProviderID, slot: .notes)
                             CustomProvidersView()
                         }.padding(6)
                     }
@@ -141,12 +141,12 @@ struct ProviderSlot: View {
     let title: String
     let providers: [Provider]
     @Binding var selection: String
-    let slot: String
+    let slot: ProviderModelSlot
     @State private var keyInput = ""
     @State private var modelInput = ""
 
     private var selected: Provider { providers.first { $0.id == selection } ?? providers.first ?? ProviderCatalog.builtIn[0] }
-    private var defaultModel: String { slot == "transcribe" ? (selected.transcribeModel ?? "") : (selected.notesModel ?? "") }
+    private var defaultModel: String { slot == .transcribe ? (selected.transcribeModel ?? "") : (selected.notesModel ?? "") }
 
     var body: some View {
         GroupBox(title) {
@@ -154,17 +154,17 @@ struct ProviderSlot: View {
                 Picker("Provider", selection: $selection) {
                     ForEach(providers) { Text($0.name).tag($0.id) }
                 }
-                if selected.transcribeStyle == "offline" && slot == "transcribe" {
-                    if selected.id == "offline-qwen3-asr" {
+                if selected.transcribeStyle == .offline && slot == .transcribe {
+                    if selected.id == ProviderCatalog.offlineQwen3ASRID {
                         QwenASRProviderSettings()
                     } else {
                         OfflineProviderSettings()
                     }
-                } else if selected.notesStyle == "apple" && slot == "notes" {
+                } else if selected.notesStyle == .apple && slot == .notes {
                     AppleOnDeviceProviderSettings()
-                } else if selected.notesStyle == "qwen-mlx" && slot == "notes" {
+                } else if selected.notesStyle == .qwenMLX && slot == .notes {
                     QwenLocalNotesProviderSettings()
-                } else if selected.notesStyle == "codex-cli" && slot == "notes" {
+                } else if selected.notesStyle == .codexCLI && slot == .notes {
                     CodexCLIProviderSettings()
                 } else {
                     HStack {

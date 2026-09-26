@@ -170,6 +170,12 @@ public struct OfflineJobStore: Sendable {
     public var transcriptionDir: URL { sessionDir.appendingPathComponent("transcription", isDirectory: true) }
     public var partsDir: URL { transcriptionDir.appendingPathComponent("parts", isDirectory: true) }
     public var stateURL: URL { transcriptionDir.appendingPathComponent("state.json") }
+    /// The local transcription worker's stdout/stderr, opened fresh per run
+    /// (see `OfflineJobCoordinator.start`). Not a part file — never read by
+    /// the chunk-recovery scan in `recoveredView()`/`recover()`, and removed
+    /// along with the rest of `transcriptionDir` by
+    /// `clearGeneratedTranscription()`.
+    public var workerLogURL: URL { transcriptionDir.appendingPathComponent("worker.log") }
 
     public init(sessionDir: URL) { self.sessionDir = sessionDir }
 
@@ -202,8 +208,22 @@ public struct OfflineJobStore: Sendable {
 
     /// Repairs only the persisted v1 state: abandoned temporary files are removed,
     /// stale `transcribing` becomes `pending`, and progress is rebuilt from parts.
+    /// Used only when a job is actually about to start/resume (`prepare()`);
+    /// see `recoveredView()` for the read-only counterpart used by `scan()`.
     public func recover() throws -> OfflineJobState {
         try removeTemporaryFiles()
+        let state = try recoveredView()
+        try save(state)
+        return state
+    }
+
+    /// Same recovered view as `recover()` — status `transcribing` → `pending`
+    /// in memory, progress recomputed from committed parts — but never
+    /// deletes temporary files or writes `state.json`. Safe to call for a
+    /// session an active worker might be mid-write on (see P0-5): `scan()`
+    /// uses this instead of `recover()`, which mutates disk and could race
+    /// the folder a job is actively writing to.
+    public func recoveredView() throws -> OfflineJobState {
         var state = try load()
         if state.status == .transcribing { state.status = .pending }
         var processedByTrack = ["system": 0.0, "mic": 0.0]
@@ -229,7 +249,6 @@ public struct OfflineJobStore: Sendable {
             processedSeconds: processed, totalSeconds: total,
             trackProcessedSeconds: processedByTrack, rollingRTF: rolling,
             etaSeconds: rolling.map { Int(round(max(0, total - processed) * $0)) })
-        try save(state)
         return state
     }
 

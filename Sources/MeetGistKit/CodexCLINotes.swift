@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import Foundation
-import Darwin
 
 /// Notes provider backed by a local `codex` CLI subprocess (`codex exec`),
 /// authenticated via the user's own ChatGPT subscription login (`codex login`).
@@ -98,10 +97,6 @@ private struct CodexCLIProcessGenerator: CodexCLIGenerating {
         try prompt.write(to: promptURL, atomically: true, encoding: .utf8)
         let inputHandle = try FileHandle(forReadingFrom: promptURL)
         defer { try? inputHandle.close() }
-        let logURL = temporary.appendingPathComponent("codex.log")
-        fm.createFile(atPath: logURL.path, contents: nil)
-        let log = try FileHandle(forWritingTo: logURL)
-        defer { try? log.close() }
 
         let process = Process()
         process.executableURL = codexURL
@@ -115,39 +110,23 @@ private struct CodexCLIProcessGenerator: CodexCLIGenerating {
             "-",
         ]
         process.standardInput = inputHandle
-        process.standardOutput = log
-        process.standardError = log
 
-        let controller = CodexProcessController(process: process)
-        let status: Int32 = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                process.terminationHandler = {
-                    controller.didFinish()
-                    continuation.resume(returning: $0.terminationStatus)
-                }
-                do {
-                    try process.run()
-                    controller.didStart()
-                    controller.armTimeout(seconds: Self.timeoutSeconds)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        } onCancel: {
-            controller.cancel()
-        }
-        try Task.checkCancellation()
-        if controller.timedOut {
+        // ChildProcess drains stdout/stderr concurrently, honors cancellation,
+        // and enforces the timeout below (this subprocess can hang with no
+        // output at all for reasons outside MeetGist's control).
+        let result = try await ChildProcess.run(process, timeout: Self.timeoutSeconds, keepTail: true)
+        if result.timedOut {
             throw PipelineError.badResponse(
                 "Codex CLI did not respond within \(Int(Self.timeoutSeconds))s and was stopped. " +
                 "This can happen with the ChatGPT-subscription auth channel for reasons outside " +
                 "MeetGist's control; try again, or pick a different Notes provider."
             )
         }
-        guard status == 0 else {
-            let tail = (try? String(contentsOf: logURL, encoding: .utf8))?
-                .split(separator: "\n").suffix(12).joined(separator: "\n")
-            throw PipelineError.badResponse(tail ?? "Codex CLI exited with status \(status)")
+        guard result.status == 0 else {
+            let combined = String(decoding: result.stdout, as: UTF8.self)
+                + String(decoding: result.stderr, as: UTF8.self)
+            let tail = combined.split(separator: "\n").suffix(12).joined(separator: "\n")
+            throw PipelineError.badResponse(tail.isEmpty ? "Codex CLI exited with status \(result.status)" : tail)
         }
         guard fm.fileExists(atPath: outputURL.path),
               let output = try? String(contentsOf: outputURL, encoding: .utf8),
@@ -180,75 +159,4 @@ public enum CodexCLIAvailability {
         return nil
     }
     public static var isInstalled: Bool { executableURL != nil }
-}
-
-/// Mirrors QwenProcessController: SIGTERM first with a short grace period, then
-/// SIGKILL, plus a timer-based timeout since this subprocess can hang with no
-/// output at all (no bytes to detect a stall from, unlike a stuck decode loop).
-private final class CodexProcessController: @unchecked Sendable {
-    private let lock = NSLock()
-    private let process: Process
-    private var canceled = false
-    private var finished = false
-    private var timeoutWorkItem: DispatchWorkItem?
-    private(set) var timedOut = false
-
-    init(process: Process) { self.process = process }
-
-    func didStart() {
-        lock.lock()
-        let shouldCancel = canceled
-        lock.unlock()
-        if shouldCancel { stop() }
-    }
-
-    func armTimeout(seconds: TimeInterval) {
-        let work = DispatchWorkItem { [weak self] in self?.fireTimeout() }
-        lock.lock()
-        if finished { lock.unlock(); return }
-        timeoutWorkItem = work
-        lock.unlock()
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: work)
-    }
-
-    private func fireTimeout() {
-        lock.lock()
-        guard !finished else { lock.unlock(); return }
-        timedOut = true
-        let running = process.isRunning
-        lock.unlock()
-        if running { stop() }
-    }
-
-    func cancel() {
-        lock.lock()
-        canceled = true
-        let running = process.isRunning
-        lock.unlock()
-        if running { stop() }
-    }
-
-    /// Called from the process termination handler on normal exit, so the
-    /// armed timeout timer is canceled instead of firing 120s later for no
-    /// reason once the process has already finished.
-    func didFinish() { markFinished() }
-
-    private func markFinished() {
-        lock.lock()
-        finished = true
-        let work = timeoutWorkItem
-        timeoutWorkItem = nil
-        lock.unlock()
-        work?.cancel()
-    }
-
-    private func stop() {
-        process.terminate()
-        let pid = process.processIdentifier
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak process] in
-            guard let process, process.isRunning else { return }
-            Darwin.kill(pid, SIGKILL)
-        }
-        markFinished()
-    }
 }
