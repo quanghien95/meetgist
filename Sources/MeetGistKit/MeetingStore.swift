@@ -10,6 +10,24 @@ public struct Meeting: Identifiable, Sendable, Hashable, Codable {
     public let title: String
     public let hasTranscript: Bool
     public let hasNotes: Bool
+    /// Wall-clock recording length (stop minus start), from `capture_timing.json`.
+    /// `nil` for imported audio, which has no capture session to time.
+    public let durationSeconds: Double?
+
+    public init(id: String, dir: URL, date: Date?, title: String,
+                hasTranscript: Bool, hasNotes: Bool, durationSeconds: Double? = nil) {
+        self.id = id; self.dir = dir; self.date = date; self.title = title
+        self.hasTranscript = hasTranscript; self.hasNotes = hasNotes
+        self.durationSeconds = durationSeconds
+    }
+
+    /// "42m" or "1h 05m" for the list row / detail header; `nil` when unknown.
+    public var formattedDuration: String? {
+        guard let seconds = durationSeconds, seconds > 0 else { return nil }
+        let total = Int(seconds.rounded())
+        let hours = total / 3600, minutes = (total % 3600) / 60
+        return hours > 0 ? String(format: "%dh %02dm", hours, minutes) : "\(minutes)m"
+    }
 }
 
 /// Caches the last-known meeting list to disk so launch can paint instantly
@@ -58,7 +76,7 @@ public enum MeetingStore {
             guard hasAudio || hasTranscript || hasMinutes || hasSummary else { continue }
             out.append(Meeting(id: url.lastPathComponent, dir: url, date: createdDate(for: url),
                                title: displayTitle(for: url), hasTranscript: hasTranscript,
-                               hasNotes: hasNotes))
+                               hasNotes: hasNotes, durationSeconds: recordingDuration(for: url)))
         }
         return out.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
@@ -87,6 +105,21 @@ public enum MeetingStore {
         guard parts.count > 4 else { return nil }
         let prefix = parts[0...3].joined(separator: "-")
         return folderNameDateFormatter.date(from: prefix)
+    }
+
+    /// Recording length from `capture_timing.json`'s host-clock start/stop
+    /// timestamps (nanoseconds, same monotonic clock so their difference is a
+    /// valid duration regardless of wall-clock time). Cheap: a small JSON file,
+    /// no audio decode. `nil` for imported audio, which has no capture session.
+    private static func recordingDuration(for url: URL) -> Double? {
+        guard let data = try? Data(contentsOf: url.appendingPathComponent("capture_timing.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let session = object["session"] as? [String: Any],
+              let startNs = (session["record_command_start_host_ns"] as? NSNumber)?.doubleValue,
+              let stopNs = (session["stop_completed_host_ns"] as? NSNumber)?.doubleValue,
+              stopNs > startNs
+        else { return nil }
+        return (stopNs - startNs) / 1_000_000_000
     }
 
     /// Read one of the markdown outputs (e.g. "transcript.md").

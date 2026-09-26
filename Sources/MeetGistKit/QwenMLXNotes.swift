@@ -18,11 +18,22 @@ struct QwenNotesMetrics: Codable, Sendable {
     let promptTokens: Int
     let generationTokens: Int
     let sourceChunks: Int
+    // Phase 1 baseline instrumentation, kept alongside the original fields
+    // above (never removed) so old and new runs stay comparable.
+    let wallClockSeconds: Double?
+    let numberOfLLMCalls: Int?
+    let mapCalls: Int?
+    let reduceCalls: Int?
+    let finalCalls: Int?
+    let usedDirectContext: Bool?
 
     init(elapsedSeconds: Double, modelLoadSeconds: Double? = nil,
          prefillSeconds: Double? = nil, generationSeconds: Double? = nil,
          generationTokensPerSecond: Double? = nil, peakMemoryGB: Double,
-         promptTokens: Int, generationTokens: Int, sourceChunks: Int) {
+         promptTokens: Int, generationTokens: Int, sourceChunks: Int,
+         wallClockSeconds: Double? = nil, numberOfLLMCalls: Int? = nil,
+         mapCalls: Int? = nil, reduceCalls: Int? = nil, finalCalls: Int? = nil,
+         usedDirectContext: Bool? = nil) {
         self.elapsedSeconds = elapsedSeconds
         self.modelLoadSeconds = modelLoadSeconds
         self.prefillSeconds = prefillSeconds
@@ -32,6 +43,12 @@ struct QwenNotesMetrics: Codable, Sendable {
         self.promptTokens = promptTokens
         self.generationTokens = generationTokens
         self.sourceChunks = sourceChunks
+        self.wallClockSeconds = wallClockSeconds
+        self.numberOfLLMCalls = numberOfLLMCalls
+        self.mapCalls = mapCalls
+        self.reduceCalls = reduceCalls
+        self.finalCalls = finalCalls
+        self.usedDirectContext = usedDirectContext
     }
 }
 
@@ -47,16 +64,20 @@ protocol QwenMLXGenerating: Sendable {
 
 struct QwenMLXNotesWriter: NotesWriter {
     let template: String?
+    let language: String
     private let generator: any QwenMLXGenerating
-    var label: String { "Qwen3-8B-4bit · MLX-LM" }
+    var label: String { LocalNotesRuntimeManager.activeModel.displayLabel }
 
-    init(template: String? = nil) {
+    init(template: String? = nil, language: String = Prompts.defaultNotesLanguage) {
         self.template = template
+        self.language = language
         self.generator = QwenMLXProcessGenerator()
     }
 
-    init(template: String? = nil, generator: any QwenMLXGenerating) {
+    init(template: String? = nil, language: String = Prompts.defaultNotesLanguage,
+         generator: any QwenMLXGenerating) {
         self.template = template
+        self.language = language
         self.generator = generator
     }
 
@@ -66,11 +87,11 @@ struct QwenMLXNotesWriter: NotesWriter {
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PipelineError.badResponse("transcript.md is empty")
         }
-        progress("Loading Qwen3 8B and preparing local Meeting Minutes…")
+        progress("Loading Qwen3 4B and preparing local Meeting Minutes…")
         let isTemplate = template?.isEmpty == false
         let instructions = isTemplate
-            ? Prompts.templatedNotes(template!)
-            : Prompts.polished
+            ? Prompts.templatedNotes(template!, language: language)
+            : Prompts.polished(language: language)
         let response = try await generator.generate(QwenNotesRequest(
             transcript: transcript,
             instructions: instructions,
@@ -116,6 +137,7 @@ private struct QwenMLXProcessGenerator: QwenMLXGenerating {
         let log = try FileHandle(forWritingTo: logURL)
         defer { try? log.close() }
 
+        let config = LocalNotesRuntimeManager.activeModel
         let process = Process()
         process.executableURL = root.appendingPathComponent("python/bin/python3")
         process.arguments = [
@@ -123,6 +145,15 @@ private struct QwenMLXProcessGenerator: QwenMLXGenerating {
             "--request", requestURL.path,
             "--output", outputURL.path,
             "--model", root.appendingPathComponent("model").path,
+            "--direct-source-tokens", String(config.directSourceTokens),
+            "--map-source-tokens", String(config.mapSourceTokens),
+            "--map-output-tokens", String(config.mapOutputTokens),
+            "--reduce-source-tokens", String(config.reduceSourceTokens),
+            "--reduce-output-tokens", String(config.reduceOutputTokens),
+            "--final-output-tokens", String(config.finalOutputTokens),
+            "--temperature", String(config.temperature),
+            "--top-p", String(config.topP),
+            "--top-k", String(config.topK),
         ]
         var environment = ProcessInfo.processInfo.environment
         // The setup step is the only code allowed to access Hugging Face. Normal

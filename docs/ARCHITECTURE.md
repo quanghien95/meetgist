@@ -51,11 +51,19 @@ There are two independent provider selections:
 | Capability | Providers | Boundary |
 | --- | --- | --- |
 | Transcription | Existing cloud providers, Offline MLX Whisper | Produces `transcript.md` |
-| Notes / summary | Existing cloud providers, Apple Foundation Models, Local Qwen MLX-LM | Consumes `transcript.md`; produces existing notes outputs |
+| Notes / summary | Existing cloud providers, Apple Foundation Models, Local Qwen MLX-LM, Codex CLI | Consumes `transcript.md`; produces existing notes outputs |
 
 The composed cloud pipeline remains intact for existing cloud behavior. Local
 workers are explicit selections and must never silently fall back to cloud.
 Local Whisper does not generate notes; Local Qwen does not transcribe audio.
+Codex CLI is a cloud provider, not a local one, even though it runs as a local
+subprocess: it sends the transcript to OpenAI over the user's own ChatGPT
+subscription session (`codex login`). It requires no API key and no
+MeetGist-managed runtime/model install — the prerequisite is that the user
+already has `codex` installed and logged in. Real-world testing found `codex
+exec` can occasionally hang indefinitely for reasons outside MeetGist's
+control; `CodexCLINotes.swift` enforces a 120s timeout so this cannot block
+Generate/Regenerate forever.
 
 With automatic transcription enabled, cloud and Offline MLX Whisper follow the
 same user-visible completion sequence: transcript, then the selected notes
@@ -100,10 +108,15 @@ changing the transcript contract.
 ### Local Qwen MLX-LM
 
 `LocalNotesRuntimeManager` installs and validates the pinned Qwen runtime and
-model (`mlx-community/Qwen3-8B-4bit`, with the revision pinned in code).
-`QwenMLXNotes` runs `qwen_notes_worker.py` as an app-managed local process.
-After setup, generation is offline. The worker performs one model load per
-Generate/Regenerate job, then accumulates chunk/reduce timings.
+model (`mlx-community/Qwen3-4B-Instruct-2507-4bit`, with the revision pinned in
+code via `LocalNotesModelConfig`). `QwenMLXNotes` runs `qwen_notes_worker.py`
+as an app-managed local process. After setup, generation is offline. The
+worker performs one model load per Generate/Regenerate job. Most meetings fit
+the direct-context token budget and get a single final generation call; only
+transcripts above that budget fall back to chunked map/reduce condensation
+before the final call. Token budgets and sampler settings live in
+`LocalNotesModelConfig` (Swift) and are passed to the worker as CLI flags, so
+swapping the pinned model only requires changing that one config.
 
 ## Runtime storage and lifecycle
 
@@ -112,14 +125,16 @@ App-managed runtimes are kept outside meeting data in Application Support:
 ```text
 MeetGist/
 ├── OfflineWhisper/v1/
-└── LocalNotes/Qwen3-8B/v1/
+└── LocalNotes/Qwen3-4B/v1/
     └── last-run-metrics.json
 ```
 
 Qwen's metric file describes only the most recent local Qwen notes job. It
-includes total elapsed time, model load, reliable MLX prefill/decode timing,
-token counts/rate, peak memory, and source chunk count when available. Whisper
-uses per-meeting job state and part timing instead.
+includes total elapsed time, wall-clock time, model load, reliable MLX
+prefill/decode timing, token counts/rate, peak memory, source chunk count, and
+a breakdown of map/reduce/final LLM call counts (so a direct-context run and a
+map/reduce fallback run are distinguishable) when available. Whisper uses
+per-meeting job state and part timing instead.
 
 Recording has priority over local processing. The app safely stops or cancels
 the relevant local worker before capture begins; local work must support normal

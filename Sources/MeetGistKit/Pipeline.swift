@@ -84,7 +84,8 @@ public enum Pipelines {
     /// keys. Throws a `PipelineError` describing what's missing/unsupported.
     public static func make(transcription: Provider, transcriptionKey: String?,
                             notes: Provider, notesKey: String?,
-                            notesTemplate: String? = nil) throws -> MeetingPipeline {
+                            notesTemplate: String? = nil,
+                            notesLanguage: String? = nil) throws -> MeetingPipeline {
         let transcriber: Transcriber
         switch transcription.transcribeStyle {
         case "gemini":
@@ -100,7 +101,7 @@ public enum Pipelines {
         }
 
         let writer = try makeNotesWriter(notes: notes, notesKey: notesKey,
-                                         notesTemplate: notesTemplate)
+                                         notesTemplate: notesTemplate, notesLanguage: notesLanguage)
 
         return ComposedPipeline(providerName: "\(transcription.name) → \(notes.name)",
                                 transcriber: transcriber, notesWriter: writer)
@@ -109,24 +110,30 @@ public enum Pipelines {
     /// Build only the transcript → minutes stage. Offline transcription uses this
     /// later, without changing the existing composed cloud pipeline.
     public static func makeNotesWriter(notes: Provider, notesKey: String?,
-                                       notesTemplate: String? = nil) throws -> any NotesWriter {
+                                       notesTemplate: String? = nil,
+                                       notesLanguage: String? = nil) throws -> any NotesWriter {
+        let language = (notesLanguage?.isEmpty == false) ? notesLanguage! : Prompts.defaultNotesLanguage
         let writer: NotesWriter
         switch notes.notesStyle {
         case "gemini":
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
             writer = GeminiNotesWriter(apiKey: key, baseURL: notes.baseURL,
                                        model: notes.notesModel ?? "gemini-flash-latest",
-                                       template: notesTemplate)
+                                       template: notesTemplate, language: language)
         case "chat":
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
             guard let model = notes.notesModel, !model.isEmpty else {
                 throw PipelineError.unsupported("\(notes.name) needs a model name in Settings.")
             }
-            writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model, template: notesTemplate)
+            writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model,
+                                     template: notesTemplate, language: language)
         case "apple":
-            writer = AppleFoundationModelsNotesWriter(template: notesTemplate)
+            writer = AppleFoundationModelsNotesWriter(template: notesTemplate, language: language)
         case "qwen-mlx":
-            writer = QwenMLXNotesWriter(template: notesTemplate)
+            writer = QwenMLXNotesWriter(template: notesTemplate, language: language)
+        case "codex-cli":
+            writer = CodexCLINotesWriter(template: notesTemplate, language: language,
+                                         reasoningEffort: notes.notesReasoningEffort)
         default:
             throw PipelineError.unsupported("\(notes.name) can't write notes.")
         }

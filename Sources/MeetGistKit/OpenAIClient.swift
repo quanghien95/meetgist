@@ -138,6 +138,7 @@ struct ChatNotesWriter: NotesWriter {
     let baseURL: String
     let model: String
     var template: String? = nil
+    var language: String = Prompts.defaultNotesLanguage
     var label: String { model }
 
     func notes(transcript: String,
@@ -145,11 +146,11 @@ struct ChatNotesWriter: NotesWriter {
         progress("Writing minutes & summary…")
         let http = OpenAIHTTP(apiKey: apiKey, base: baseURL)
         if let t = template, !t.isEmpty {
-            let out = try await http.chat(model: model, system: Prompts.templatedNotes(t), user: transcript)
+            let out = try await http.chat(model: model, system: Prompts.templatedNotes(t, language: language), user: transcript)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return (out, out)
         }
-        let raw = try await http.chat(model: model, system: Prompts.polished, user: transcript)
+        let raw = try await http.chat(model: model, system: Prompts.polished(language: language), user: transcript)
         return splitPolished(raw)
     }
 }

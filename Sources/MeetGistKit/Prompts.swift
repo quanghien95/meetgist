@@ -74,8 +74,13 @@ public enum Prompts {
         """
     }
 
+    /// Default notes/summary output language. The app-wide setting a user can
+    /// change in Settings → Notes; every notes provider (cloud and local) reads
+    /// this same value so behavior stays consistent across providers.
+    public static var defaultNotesLanguage: String = "Vietnamese"
+
     /// Call 2 (template mode): fill the user's own template from the transcript.
-    public static func templatedNotes(_ template: String) -> String {
+    public static func templatedNotes(_ template: String, language: String = defaultNotesLanguage) -> String {
         """
         Below is a verbatim meeting transcript. Produce meeting notes by filling in the
         TEMPLATE below using only what's in the transcript.
@@ -84,8 +89,10 @@ public enum Prompts {
         - Keep the template's exact structure, sections, and headings.
         - Fill each section from the transcript. If a section has no relevant content,
           write "—". Do not invent information.
-        - Write in the dominant language of the transcript (Simplified Chinese if the
-          transcript is mostly Chinese, otherwise English).
+        - Write in \(language), EXCEPT: if the dominant spoken language in the
+          transcript is Chinese (Mandarin or Cantonese, in any script), write in
+          Simplified Chinese (简体中文) instead — never Traditional. Preserve English
+          technical terms, speaker names, identifiers, code, and product names as-is.
         - Output ONLY the filled template — no preamble, no commentary.
 
         TEMPLATE:
@@ -94,16 +101,13 @@ public enum Prompts {
     }
 
     /// Call 2: transcript text → polished minutes + summary (text-only, no audio).
-    public static let polished: String = """
-    Below is a verbatim meeting transcript. Based on it, produce two sections.
-
-    First, decide a LANGUAGE:
-    - If the dominant spoken language in the transcript is Chinese (Mandarin or
-      Cantonese, in any script), LANGUAGE = Simplified Chinese (简体中文).
-    - Otherwise (English, mixed, or any other language), LANGUAGE = English.
-
-    Output in EXACTLY this format:
-
+    /// The exact Markdown skeleton `polished(language:)` asks the model to fill
+    /// in. This is the single source of truth for the default notes structure —
+    /// `NotesTemplateCatalog`'s "Full minutes & summary" preview is generated
+    /// from this same constant (see `NotesTemplateCatalog.defaultPreview`)
+    /// instead of keeping its own hand-copied duplicate, so the template a user
+    /// sees in Settings can never drift from what generation actually produces.
+    public static let polishedOutputFormat: String = """
     ---POLISHED---
     # [Meeting Title or "Meeting Minutes"]
 
@@ -112,6 +116,9 @@ public enum Prompts {
 
     ## Recording Information
     - **Duration**: ...
+    - **Attendees**: comma-separated list of every distinct speaker name/label
+      that appears in the transcript (e.g. "Me, Alice, Bob"). Use whatever
+      labels the transcript uses (names if known, otherwise "Speaker 1" etc.).
     - **Number of participants**: ...
     - **Content type**: ...
 
@@ -128,9 +135,6 @@ public enum Prompts {
     - "..." (Speaker Name) — (Strategic insight / Thinking inspiration / Key decision)
     ...
 
-    ## To-do Items
-    - [ ] Owner - task description
-
     ## Per-Speaker Stance
     - **Speaker Name**:
       - Claimed / Argued: what positions, arguments, or opinions they expressed
@@ -142,33 +146,55 @@ public enum Prompts {
     (2-4 sentences in LANGUAGE)
 
     ## Key Decisions
-    - ... (in LANGUAGE)
+    - ...
 
     ## Action Items
-    - [ ] Owner - task (due: date if mentioned)   <- in LANGUAGE
+    - [ ] Owner - task (due: date if mentioned)
 
     ## Open Questions / Follow-ups
-    - ... (in LANGUAGE)
+    - ...
 
     ## Notable Context
-    (anything important for future reference, in LANGUAGE)
+    (anything important for future reference)
+    """
+
+    public static func polished(language: String = defaultNotesLanguage) -> String {
+        """
+    Below is a verbatim meeting transcript. Based on it, produce two sections.
+
+    First, decide a LANGUAGE:
+    - If the dominant spoken language in the transcript is Chinese (Mandarin or
+      Cantonese, in any script), LANGUAGE = Simplified Chinese (简体中文).
+    - Otherwise (English, mixed, or any other language, including the transcript's
+      own language if it differs), LANGUAGE = \(language). Translate into
+      \(language) as needed — do not keep the source language just because that's
+      what was spoken. Preserve English technical terms, speaker names,
+      identifiers, code, and product names as-is; do not translate those.
+
+    Output in EXACTLY this format:
+
+    \(polishedOutputFormat)
 
     Rules:
     - POLISHED: same content as the transcript but disfluencies removed, repeats
       merged, broken sentences healed — make it clear, detailed, and ready for
       reading. Meaning preserved, no new information added.
-      Write entirely in LANGUAGE.
+      Write entirely in LANGUAGE, including every section heading (translate
+      headings like "Smart Summary", "Recording Information", "Chapter Summary",
+      "Selected Quotes", "Per-Speaker Stance" into natural LANGUAGE headings —
+      do not leave headings in English when LANGUAGE is not English).
       If LANGUAGE is Simplified Chinese: use natural Chinese section headings
-      (e.g. "📑 智能摘要", "📋 待办事项", "✨ 精选语录", "📅 章节摘要", "👥 各发言人立场").
-      If LANGUAGE is English: use English section headings.
+      (e.g. "📑 智能摘要", "✨ 精选语录", "📅 章节摘要", "👥 各发言人立场").
     - SUMMARY (everything after ---SUMMARY---): write entirely in LANGUAGE,
-      headings included. Do NOT mix languages.
+      headings included (translate "TL;DR", "Key Decisions", "Action Items",
+      "Open Questions / Follow-ups", "Notable Context" into natural LANGUAGE
+      headings). Do NOT mix languages.
       If LANGUAGE is Simplified Chinese: translate the section headings too —
       "## 摘要 / ## 关键决定 / ## 行动项 / ## 待解决问题 / ## 补充背景" — and write all
       content in 简体中文. Use 简体, never 繁體.
-      If LANGUAGE is English: everything in English.
     - Consistency: the entire output (every heading, label, and body line) must be in
-      one LANGUAGE. Never put an English heading on Chinese content or vice versa.
+      one LANGUAGE. Never put an English heading on non-English content or vice versa.
     - Be polished and readable on the POLISHED section; be punchy on the summary.
     """
+    }
 }

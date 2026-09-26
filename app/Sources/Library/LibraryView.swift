@@ -18,6 +18,14 @@ struct LibraryView: View {
         return state.meetings.filter { $0.title.localizedCaseInsensitiveContains(query) }
     }
     private var isLive: Bool { state.state == .recording || state.state == .paused }
+    /// A bare "42" in the status bar read as unlabeled noise — spell out what
+    /// it counts. English distinguishes "1 meeting" from "N meetings"; zh has
+    /// no singular/plural distinction so the localized noun covers both.
+    private var meetingsCountLabel: String {
+        let count = state.meetings.count
+        if loc.effective == .zh { return "\(count) \(loc.t(L.meetingsCount))" }
+        return count == 1 ? "1 meeting" : "\(count) \(loc.t(L.meetingsCount))"
+    }
 
     /// Only the meeting actively being processed is locked; finished meetings
     /// stay renameable/deletable even while another one is transcribing or a
@@ -105,7 +113,7 @@ struct LibraryView: View {
                     Text("\(loc.t(L.loadingMeetings)) (\(state.meetings.count))")
                         .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
                 } else {
-                    Text("\(state.meetings.count)")
+                    Text(meetingsCountLabel)
                         .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
                 if !state.hasKeys {
@@ -168,6 +176,9 @@ struct MeetingRow: View {
                 if let d = meeting.date {
                     Text(d, format: .dateTime.month().day().hour().minute())
                         .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                }
+                if let duration = meeting.formattedDuration {
+                    Text("· \(duration)").font(Theme.mono(10)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
                 if meeting.hasNotes {

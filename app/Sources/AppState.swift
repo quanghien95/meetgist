@@ -45,6 +45,11 @@ final class AppState: ObservableObject {
     @Published var postProcessSource: String { didSet { UserDefaults.standard.set(postProcessSource, forKey: Keys.postProcessSource) } }
     @Published var useTemplate: Bool { didSet { UserDefaults.standard.set(useTemplate, forKey: Keys.useTemplate) } }
     @Published var notesTemplate: String { didSet { UserDefaults.standard.set(notesTemplate, forKey: Keys.template) } }
+    /// Output language for generated Meeting Minutes/Summary, every notes
+    /// provider (cloud and local). Defaults to Vietnamese regardless of the
+    /// transcript's own language — Chinese transcripts still generate Chinese
+    /// output (see `Prompts.polished`'s LANGUAGE rule), which takes precedence.
+    @Published var notesLanguage: String { didSet { UserDefaults.standard.set(notesLanguage, forKey: Keys.notesLanguage) } }
     @Published var transcriptionProviderID: String { didSet { UserDefaults.standard.set(transcriptionProviderID, forKey: Keys.transcribe); refreshKeyFlag() } }
     @Published var notesProviderID: String { didSet { UserDefaults.standard.set(notesProviderID, forKey: Keys.notes); refreshKeyFlag() } }
     @Published var customProviders: [Provider] { didSet { saveCustom() } }
@@ -92,6 +97,7 @@ final class AppState: ObservableObject {
         static let output = "MeetGistOutputDir", presence = "MeetGistPresence", auto = "MeetGistAutoTranscribe"
         static let transcribe = "MeetGistTranscribeProvider", notes = "MeetGistNotesProvider", custom = "MeetGistCustomProviders"
         static let useTemplate = "MeetGistUseTemplate", template = "MeetGistTemplate"
+        static let notesLanguage = "MeetGistNotesLanguage"
         static let offlineLanguage = "MeetGistOfflineLanguage", offlineVocabulary = "MeetGistOfflineVocabulary"
         static let detectMeetings = "MeetGistDetectMeetings", postProcessEnabled = "MeetGistPostProcessEnabled", postProcessSource = "MeetGistPostProcessSource"
         static let autoGenerateNotes = "MeetGistAutoGenerateNotes"
@@ -109,6 +115,7 @@ final class AppState: ObservableObject {
         postProcessSource = d.string(forKey: Keys.postProcessSource) ?? "import os\n\n# Available values are in MEETGIST_* environment variables.\nprint(f\"Processed: {os.environ['MEETGIST_MEETING_TITLE']}\")\n"
         useTemplate = (d.object(forKey: Keys.useTemplate) as? Bool) ?? false
         notesTemplate = d.string(forKey: Keys.template) ?? ""
+        notesLanguage = d.string(forKey: Keys.notesLanguage) ?? Prompts.defaultNotesLanguage
         transcriptionProviderID = d.string(forKey: Keys.transcribe) ?? "gemini"
         notesProviderID = d.string(forKey: Keys.notes) ?? "gemini"
         offlineLanguage = d.string(forKey: Keys.offlineLanguage) ?? "auto"
@@ -147,16 +154,28 @@ final class AppState: ObservableObject {
         var e = p; let d = UserDefaults.standard
         if let m = d.string(forKey: "model.\(p.id).transcribe"), !m.isEmpty { e.transcribeModel = m }
         if let m = d.string(forKey: "model.\(p.id).notes"), !m.isEmpty { e.notesModel = m }
+        if p.notesStyle == "codex-cli",
+           let effort = d.string(forKey: "model.\(p.id).notes-effort"), !effort.isEmpty {
+            e.notesReasoningEffort = effort
+        }
         return e
     }
     func key(for p: Provider) -> String? { Keychain.get(p.keyAccount) }
     func hasKey(_ p: Provider) -> Bool {
         p.transcribeStyle == "offline" || p.notesStyle == "apple"
-            || p.notesStyle == "qwen-mlx" || Keychain.get(p.keyAccount) != nil
+            || p.notesStyle == "qwen-mlx" || p.notesStyle == "codex-cli"
+            || Keychain.get(p.keyAccount) != nil
     }
     func saveKey(_ k: String, for p: Provider) { Keychain.set(k.trimmingCharacters(in: .whitespacesAndNewlines), for: p.keyAccount); refreshKeyFlag() }
     func setModel(_ m: String, for p: Provider, slot: String) { UserDefaults.standard.set(m.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "model.\(p.id).\(slot)"); objectWillChange.send() }
     func modelOverride(_ p: Provider, slot: String) -> String { UserDefaults.standard.string(forKey: "model.\(p.id).\(slot)") ?? "" }
+    func setCodexReasoningEffort(_ effort: String, for p: Provider) {
+        UserDefaults.standard.set(effort, forKey: "model.\(p.id).notes-effort")
+        objectWillChange.send()
+    }
+    func codexReasoningEffort(for p: Provider) -> String {
+        UserDefaults.standard.string(forKey: "model.\(p.id).notes-effort") ?? (p.notesReasoningEffort ?? "none")
+    }
     func addCustomProvider() { customProviders.append(ProviderCatalog.newCustom(id: "custom-\(customProviders.count + 1)-\(UInt8.random(in: 0...255))")) }
     func updateCustom(_ p: Provider) { if let i = customProviders.firstIndex(where: { $0.id == p.id }) { customProviders[i] = p } }
     func removeCustom(_ p: Provider) { customProviders.removeAll { $0.id == p.id }; if transcriptionProviderID == p.id { transcriptionProviderID = "gemini" }; if notesProviderID == p.id { notesProviderID = "gemini" } }
@@ -171,6 +190,7 @@ final class AppState: ObservableObject {
         switch notesProvider.notesStyle {
         case "apple": return AppleFoundationModelsSupport.availability.isReady
         case "qwen-mlx": return localNotesRuntime.state == .ready
+        case "codex-cli": return CodexCLIAvailability.isInstalled
         default: return hasKey(notesProvider)
         }
     }
@@ -190,6 +210,7 @@ final class AppState: ObservableObject {
         switch notesProvider.notesStyle {
         case "qwen-mlx": return "Install Local Qwen Notes in Settings."
         case "apple": return AppleFoundationModelsSupport.availability.message
+        case "codex-cli": return "Install Codex CLI and run `codex login` in a terminal first."
         default: return "Add an API key for the Notes provider."
         }
     }
@@ -325,7 +346,7 @@ final class AppState: ObservableObject {
                 let template = (self.useTemplate && !self.notesTemplate.isEmpty) ? self.notesTemplate : nil
                 let pipeline = try Pipelines.make(transcription: tp, transcriptionKey: self.key(for: tp),
                                                   notes: np, notesKey: self.key(for: np),
-                                                  notesTemplate: template)
+                                                  notesTemplate: template, notesLanguage: self.notesLanguage)
                 let generateNotes = self.autoGenerateNotes
                 _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline, generateNotes: generateNotes) { msg in
                     Task { @MainActor in
@@ -454,8 +475,11 @@ final class AppState: ObservableObject {
                 lastError = availability.message
                 status = "Apple On-Device is unavailable."
             } else if notesProvider.notesStyle == "qwen-mlx" {
-                lastError = "Install Qwen3 8B in Settings → AI Provider."
+                lastError = "Install Qwen3 4B in Settings → AI Provider."
                 status = "Local Qwen Notes is not installed."
+            } else if notesProvider.notesStyle == "codex-cli" {
+                lastError = "Install Codex CLI and run `codex login` in a terminal first."
+                status = "Codex CLI is not available."
             } else {
                 status = "Add an API key for the Notes provider."
             }
@@ -485,7 +509,8 @@ final class AppState: ObservableObject {
         let provider = effective(notesProvider)
         let template = (useTemplate && !notesTemplate.isEmpty) ? notesTemplate : nil
         _ = try await MeetingProcessor.generateNotes(
-            sessionDir: dir, notesProvider: provider, notesKey: key(for: provider), notesTemplate: template
+            sessionDir: dir, notesProvider: provider, notesKey: key(for: provider),
+            notesTemplate: template, notesLanguage: notesLanguage
         ) { [weak self] message in
             Task { @MainActor in self?.status = message }
         }

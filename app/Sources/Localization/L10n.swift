@@ -77,6 +77,7 @@ enum L {
     static let regenerateMinutes = LStr(en: "Regenerate Minutes", zh: "重新生成纪要")
     static let export    = LStr(en: "Export", zh: "导出")
     static let regenerate = LStr(en: "Regenerate", zh: "重新生成")
+    static let transcribe = LStr(en: "Transcribe", zh: "转录")
     static let retranscribe = LStr(en: "Re-transcribe", zh: "重新转录")
     static let retranscribeConfirmation = LStr(en: "Re-transcribe this meeting?", zh: "重新转录此会议？")
     static let retranscribeWarning = LStr(
@@ -110,6 +111,7 @@ enum L {
     static let record     = LStr(en: "Record", zh: "录制")
     static let importAudio = LStr(en: "Import Audio…", zh: "导入音频…")
     static let loadingMeetings = LStr(en: "Loading meetings…", zh: "正在加载会议…")
+    static let meetingsCount = LStr(en: "meetings", zh: "个会议")
     static let emptyHint  = LStr(
         en: "Press ⌥⌘K (or Record) to capture a meeting. MeetGist writes the transcript, polished minutes, and a summary with decisions & action items.",
         zh: "按 ⌥⌘K（或点「录制」）开始记录。结束后自动生成转录、精炼纪要，以及含关键决定与行动项的摘要。")

@@ -6,10 +6,12 @@ public extension MeetingProcessor {
     @discardableResult
     static func generateNotes(sessionDir: URL, notesProvider: Provider,
                               notesKey: String?, notesTemplate: String?,
+                              notesLanguage: String? = nil,
                               progress: @escaping @Sendable (String) -> Void) async throws
         -> (polished: String, summary: String) {
         let writer = try Pipelines.makeNotesWriter(notes: notesProvider, notesKey: notesKey,
-                                                   notesTemplate: notesTemplate)
+                                                   notesTemplate: notesTemplate,
+                                                   notesLanguage: notesLanguage)
         return try await generateNotes(sessionDir: sessionDir, writer: writer,
                                        providerName: notesProvider.name, progress: progress)
     }

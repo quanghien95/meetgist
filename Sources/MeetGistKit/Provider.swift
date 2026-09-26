@@ -14,20 +14,26 @@ public struct Provider: Identifiable, Codable, Sendable, Hashable {
     public var transcribeStyle: String?
     public var transcribeModel: String?
     /// "gemini", "chat" (OpenAI-compatible), "apple" (Foundation Models),
-    /// "qwen-mlx" (app-managed MLX-LM), or nil.
+    /// "qwen-mlx" (app-managed MLX-LM), "codex-cli" (local Codex CLI subprocess),
+    /// or nil.
     public var notesStyle: String?
     public var notesModel: String?
     public var keyHelp: String?
     public var isCustom: Bool
+    /// Codex CLI only: `-c model_reasoning_effort=<value>` for the notes call —
+    /// "none", "low", "medium" (default), "high", "xhigh", or "max".
+    public var notesReasoningEffort: String?
 
     public init(id: String, name: String, baseURL: String,
                 transcribeStyle: String? = nil, transcribeModel: String? = nil,
                 notesStyle: String? = nil, notesModel: String? = nil,
-                keyHelp: String? = nil, isCustom: Bool = false) {
+                keyHelp: String? = nil, isCustom: Bool = false,
+                notesReasoningEffort: String? = nil) {
         self.id = id; self.name = name; self.baseURL = baseURL
         self.transcribeStyle = transcribeStyle; self.transcribeModel = transcribeModel
         self.notesStyle = notesStyle; self.notesModel = notesModel
         self.keyHelp = keyHelp; self.isCustom = isCustom
+        self.notesReasoningEffort = notesReasoningEffort
     }
 
     public var canTranscribe: Bool { transcribeStyle != nil }
@@ -63,9 +69,12 @@ public enum ProviderCatalog {
                  transcribeModel: "mlx-community/Qwen3-ASR-1.7B-4bit"),
         Provider(id: "apple-foundation-models", name: "Apple On-Device",
                  baseURL: "", notesStyle: "apple", notesModel: "System Language Model"),
-        Provider(id: "qwen-mlx-local", name: "Local Qwen 8B · MLX",
+        Provider(id: "qwen-mlx-local", name: "Local Qwen 4B · MLX",
                  baseURL: "", notesStyle: "qwen-mlx",
-                 notesModel: "mlx-community/Qwen3-8B-4bit"),
+                 notesModel: "mlx-community/Qwen3-4B-Instruct-2507-4bit"),
+        Provider(id: "codex-cli", name: "Codex CLI (ChatGPT subscription)",
+                 baseURL: "", notesStyle: "codex-cli",
+                 notesModel: "gpt-6-luna", notesReasoningEffort: "none"),
         Provider(id: "deepseek", name: "DeepSeek (深度求索)",
                  baseURL: "https://api.deepseek.com/v1",
                  notesStyle: "chat", notesModel: "deepseek-v4-pro",

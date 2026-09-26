@@ -84,6 +84,20 @@ struct SettingsView: View {
                         }.padding(6)
                     }
 
+                    GroupBox("Notes language") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Output language").frame(width: 130, alignment: .leading)
+                                Picker("", selection: $state.notesLanguage) {
+                                    Text("Vietnamese").tag("Vietnamese")
+                                    Text("English").tag("English")
+                                }.labelsHidden().pickerStyle(.segmented).frame(width: 220)
+                            }
+                            Text("Applies to Meeting Minutes and Summary for every Notes provider. Chinese transcripts still generate Chinese output regardless of this setting.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.padding(6)
+                    }
+
                     TemplateSettings().environmentObject(state).environmentObject(loc)
 
                     GroupBox("Post-process script") {
@@ -150,6 +164,8 @@ struct ProviderSlot: View {
                     AppleOnDeviceProviderSettings()
                 } else if selected.notesStyle == "qwen-mlx" && slot == "notes" {
                     QwenLocalNotesProviderSettings()
+                } else if selected.notesStyle == "codex-cli" && slot == "notes" {
+                    CodexCLIProviderSettings()
                 } else {
                     HStack {
                         SecureField(state.hasKey(selected) ? "Key saved — paste to replace" : "API key", text: $keyInput)
@@ -384,7 +400,7 @@ struct QwenLocalNotesProviderSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Qwen3 8B · MLX-LM · 4-bit · Apple Silicon").font(.callout)
+                Text("Qwen3 4B Instruct (2507) · MLX-LM · 4-bit · Apple Silicon").font(.callout)
                 Spacer()
                 runtimeAction
             }
@@ -394,7 +410,7 @@ struct QwenLocalNotesProviderSettings: View {
             if state.localNotesRuntime.state == .installing {
                 ProgressView(value: state.localNotesRuntime.installProgress)
             }
-            Text("Runs fully offline after setup. Long transcripts are summarized in local chunks, then reduced before final Meeting Minutes generation. No cloud fallback.")
+            Text("Runs fully offline after setup. Most meetings are processed directly; only very long transcripts are summarized in local chunks and reduced before final Meeting Minutes generation. No cloud fallback.")
                 .font(.caption).foregroundStyle(.secondary)
             if lastRunMetrics != nil {
                 Button("Last run metrics…") { showLastRunMetrics = true }
@@ -456,6 +472,54 @@ struct QwenLocalNotesProviderSettings: View {
                 .font(.callout).foregroundStyle(.green)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout).foregroundStyle(Theme.amber)
+        }
+    }
+}
+
+struct CodexCLIProviderSettings: View {
+    @EnvironmentObject var state: AppState
+    private var provider: Provider { state.notesProvider }
+
+    private var effortBinding: Binding<String> {
+        Binding(
+            get: { state.codexReasoningEffort(for: provider) },
+            set: { state.setCodexReasoningEffort($0, for: provider) }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Codex CLI · gpt-6-luna · via your ChatGPT subscription").font(.callout)
+                Spacer()
+                installStatus
+            }
+            HStack {
+                Text("Reasoning effort").frame(width: 130, alignment: .leading)
+                Picker("", selection: effortBinding) {
+                    Text("None (fastest, recommended)").tag("none")
+                    Text("Low").tag("low")
+                    Text("Medium").tag("medium")
+                    Text("High").tag("high")
+                    Text("Extra high").tag("xhigh")
+                    Text("Max").tag("max")
+                }.labelsHidden()
+            }
+            Text("Runs the codex CLI already installed and logged in on this Mac (`codex login`). This is a cloud provider: the transcript is sent to OpenAI over your ChatGPT subscription session, the same as any other cloud Notes provider — it is not processed locally. Requires no API key.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Benchmarked for meeting minutes: \"None\" gives the same factual accuracy as higher effort levels but is faster and cheaper — higher levels mainly spend extra reasoning tokens without improving this task's output.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var installStatus: some View {
+        if CodexCLIAvailability.isInstalled {
+            Label("Codex CLI found", systemImage: "checkmark.seal.fill")
+                .font(.callout).foregroundStyle(.green)
+        } else {
+            Label("Codex CLI not found — install it and run `codex login`",
+                  systemImage: "exclamationmark.triangle")
                 .font(.callout).foregroundStyle(Theme.amber)
         }
     }

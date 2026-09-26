@@ -83,6 +83,7 @@ private struct AppleSystemModelGenerator: AppleFoundationModelsGenerating {
 
 struct AppleFoundationModelsNotesWriter: NotesWriter {
     let template: String?
+    let language: String
     private let generator: any AppleFoundationModelsGenerating
     var label: String { "Apple On-Device" }
 
@@ -93,13 +94,16 @@ struct AppleFoundationModelsNotesWriter: NotesWriter {
     static let sourceChunkCharacters = 1_600
     static let finalSourceCharacters = 900
 
-    init(template: String? = nil) {
+    init(template: String? = nil, language: String = Prompts.defaultNotesLanguage) {
         self.template = template
+        self.language = language
         self.generator = AppleSystemModelGenerator()
     }
 
-    init(template: String? = nil, generator: any AppleFoundationModelsGenerating) {
+    init(template: String? = nil, language: String = Prompts.defaultNotesLanguage,
+         generator: any AppleFoundationModelsGenerating) {
         self.template = template
+        self.language = language
         self.generator = generator
     }
 
@@ -116,12 +120,12 @@ struct AppleFoundationModelsNotesWriter: NotesWriter {
         try Task.checkCancellation()
         if let template, !template.isEmpty {
             let output = try await generator.generate(
-                instructions: Prompts.templatedNotes(template) + Self.languageRule,
+                instructions: Prompts.templatedNotes(template, language: language),
                 prompt: source)
             return (output, output)
         }
         let raw = try await generator.generate(
-            instructions: Prompts.polished + Self.languageRule,
+            instructions: Prompts.polished(language: language),
             prompt: source)
         return splitPolished(raw)
     }
@@ -208,26 +212,25 @@ struct AppleFoundationModelsNotesWriter: NotesWriter {
         return result
     }
 
+    /// Intermediate extraction/reduction steps deliberately keep the
+    /// transcript's own source language rather than translating early: only
+    /// the final `notes()` call (via `Prompts.polished(language:)`) translates
+    /// into the configured output language, so multi-pass condensation never
+    /// compounds translation drift across chunks.
     private static let chunkExtractionInstructions = """
     Extract a compact, factual record from this part of a meeting transcript.
     Preserve timestamps, speakers, decisions, action items, owners, deadlines,
     risks, open questions, and important technical details. Do not invent facts.
-    Write in the transcript's dominant language. Output only concise bullet points,
-    no preamble, and keep the response under 900 characters.
-    """ + languageRule
+    Write in the transcript's dominant source language (do not translate yet).
+    Output only concise bullet points, no preamble, and keep the response under
+    900 characters.
+    """
 
     private static let reductionInstructions = """
     Condense these partial meeting facts without losing decisions, action items,
     owners, deadlines, risks, open questions, timestamps, or technical details.
-    Merge duplicates and do not invent facts. Keep the dominant source language.
-    Output only concise bullet points, no preamble, under 900 characters.
-    """ + languageRule
-
-    private static let languageRule = """
-
-    Additional language rule for this on-device provider: if Vietnamese is the
-    dominant language, write the entire response and headings in natural Vietnamese
-    while preserving English technical terms. Use only facts present in the
-    transcript; never invent owners, deadlines, decisions, risks, or blockers.
+    Merge duplicates and do not invent facts. Keep the dominant source language
+    (do not translate yet). Output only concise bullet points, no preamble,
+    under 900 characters.
     """
 }

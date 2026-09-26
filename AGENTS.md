@@ -30,7 +30,7 @@ fact. State uncertainty explicitly.
 | Recording and audio capture | `Sources/MeetGistKit/Recorder.swift`, `SessionRecorder.swift`, `AudioTools.swift` |
 | Meeting files and list actions | `Sources/MeetGistKit/MeetingStore.swift` |
 | Provider assembly and output contracts | `Pipeline.swift`, `Provider.swift`, `Prompts.swift`, `NotesTemplates.swift` |
-| Cloud providers | `GeminiClient.swift`, `OpenAIClient.swift` |
+| Cloud providers | `GeminiClient.swift`, `OpenAIClient.swift`, `CodexCLINotes.swift` |
 | Offline MLX Whisper transcription | `OfflineJobCoordinator.swift`, `OfflineJobStore.swift`, `OfflineRuntimeManager.swift`, `Resources/offline_worker.py` |
 | Local Qwen notes | `LocalNotesRuntimeManager.swift`, `QwenMLXNotes.swift`, `Resources/qwen_notes_worker.py` |
 | Apple on-device notes | `AppleFoundationModelsNotes.swift` |
@@ -47,7 +47,7 @@ fact. State uncertainty explicitly.
 - Preserve existing cloud-provider behavior. Prefer the smallest coherent
   extension over redesigning provider abstractions.
 - Local runtimes are app-managed and isolated from meeting data:
-  `OfflineWhisper/v1` and `LocalNotes/Qwen3-8B/v1` under Application Support.
+  `OfflineWhisper/v1` and `LocalNotes/Qwen3-4B/v1` under Application Support.
 - Recording has priority over local ML work. Stop or cancel local workers safely
   before starting capture.
 

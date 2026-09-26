@@ -142,6 +142,7 @@ struct GeminiNotesWriter: NotesWriter {
     let baseURL: String
     let model: String
     var template: String? = nil
+    var language: String = Prompts.defaultNotesLanguage
     var label: String { model }
 
     func notes(transcript: String,
@@ -149,11 +150,11 @@ struct GeminiNotesWriter: NotesWriter {
         progress("Writing minutes & summary…")
         let http = GeminiHTTP(apiKey: apiKey, base: baseURL)
         if let t = template, !t.isEmpty {
-            let out = try await http.generate(model: model, parts: [["text": Prompts.templatedNotes(t)], ["text": transcript]])
+            let out = try await http.generate(model: model, parts: [["text": Prompts.templatedNotes(t, language: language)], ["text": transcript]])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return (out, out)
         }
-        let raw = try await http.generate(model: model, parts: [["text": Prompts.polished], ["text": transcript]])
+        let raw = try await http.generate(model: model, parts: [["text": Prompts.polished(language: language)], ["text": transcript]])
         return splitPolished(raw)
     }
 }

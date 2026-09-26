@@ -128,10 +128,10 @@ final class OfflineJobTests: XCTestCase {
     func testQwenProviderIsNotesOnlyAndCloudProvidersStayUnchanged() throws {
         let qwen = try XCTUnwrap(ProviderCatalog.builtIn.first { $0.id == "qwen-mlx-local" })
         XCTAssertEqual(qwen.notesStyle, "qwen-mlx")
-        XCTAssertEqual(qwen.notesModel, "mlx-community/Qwen3-8B-4bit")
+        XCTAssertEqual(qwen.notesModel, "mlx-community/Qwen3-4B-Instruct-2507-4bit")
         XCTAssertNil(qwen.transcribeStyle)
         XCTAssertEqual(try Pipelines.makeNotesWriter(notes: qwen, notesKey: nil).label,
-                       "Qwen3-8B-4bit · MLX-LM")
+                       LocalNotesRuntimeManager.activeModel.displayLabel)
 
         XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "gemini" }?.notesStyle, "gemini")
         XCTAssertEqual(ProviderCatalog.builtIn.first { $0.id == "openai" }?.notesStyle, "chat")
@@ -170,6 +170,23 @@ final class OfflineJobTests: XCTestCase {
         XCTAssertEqual(request.transcript, "[00:01] An: Chốt phương án.")
     }
 
+    func testQwenWriterPassesConfiguredLanguageIntoInstructions() async throws {
+        let recorder = QwenRequestRecorder()
+        let response = QwenNotesResponse(polished: "p", summary: "s", metrics: nil)
+        let writer = QwenMLXNotesWriter(
+            language: "English",
+            generator: StubQwenGenerator(recorder: recorder, response: response))
+
+        _ = try await writer.notes(transcript: "[00:01] An: test.", progress: { _ in })
+        let request = try XCTUnwrap(await recorder.snapshot())
+
+        XCTAssertTrue(request.instructions.contains("LANGUAGE = English"))
+    }
+
+    func testDefaultNotesLanguageIsVietnamese() {
+        XCTAssertEqual(Prompts.defaultNotesLanguage, "Vietnamese")
+    }
+
     func testQwenResultJSONPreservesVietnameseAndMarkdown() throws {
         let original = QwenNotesResponse(
             polished: "# Biên bản\n- An: Chốt phương án \"A/B\".",
@@ -205,6 +222,38 @@ final class OfflineJobTests: XCTestCase {
         XCTAssertNil(decoded.prefillSeconds)
         XCTAssertNil(decoded.generationSeconds)
         XCTAssertNil(decoded.generationTokensPerSecond)
+        XCTAssertNil(decoded.wallClockSeconds)
+        XCTAssertNil(decoded.numberOfLLMCalls)
+    }
+
+    func testQwenMetricsDecodePhase1Instrumentation() throws {
+        let json = """
+        {"elapsedSeconds":12.5,"peakMemoryGB":6.2,"promptTokens":1200,
+        "generationTokens":480,"sourceChunks":1,"wallClockSeconds":14.2,
+        "numberOfLLMCalls":1,"mapCalls":0,"reduceCalls":0,"finalCalls":1,
+        "usedDirectContext":true}
+        """
+        let decoded = try JSONDecoder().decode(QwenNotesMetrics.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.wallClockSeconds, 14.2)
+        XCTAssertEqual(decoded.numberOfLLMCalls, 1)
+        XCTAssertEqual(decoded.mapCalls, 0)
+        XCTAssertEqual(decoded.reduceCalls, 0)
+        XCTAssertEqual(decoded.finalCalls, 1)
+        XCTAssertEqual(decoded.usedDirectContext, true)
+    }
+
+    func testLocalNotesModelConfigIsQwen3_4BWithPinnedRevisionAndSensibleBudgets() {
+        let config = LocalNotesRuntimeManager.activeModel
+        XCTAssertEqual(config.modelID, "mlx-community/Qwen3-4B-Instruct-2507-4bit")
+        XCTAssertFalse(config.modelRevision.isEmpty)
+        XCTAssertEqual(config.modelRevision.count, 40, "revision must be a pinned commit sha, not a branch")
+        XCTAssertGreaterThanOrEqual(config.directSourceTokens, 24_000)
+        XCTAssertLessThanOrEqual(config.directSourceTokens, 32_000)
+        XCTAssertLessThan(config.directSourceTokens, 262_144, "must stay well under the model's max context")
+        XCTAssertEqual(config.temperature, 0.7)
+        XCTAssertEqual(config.topP, 0.8)
+        XCTAssertEqual(config.topK, 20)
     }
 
     func testQwenFailureDoesNotFallbackOrModifyTranscript() async throws {
@@ -505,5 +554,148 @@ final class OfflineJobTests: XCTestCase {
         XCTAssertEqual(metadata?["provider"], "Test provider")
         XCTAssertEqual(metadata?["model"], "Test notes")
         XCTAssertNil(metadata?["transcription"])
+    }
+
+    // MARK: Codex CLI notes provider
+
+    private enum CodexTestError: Error { case failed }
+
+    private actor CodexCallRecorder {
+        private var calls: [(prompt: String, effort: String)] = []
+        func append(prompt: String, effort: String) { calls.append((prompt, effort)) }
+        func snapshot() -> [(prompt: String, effort: String)] { calls }
+    }
+
+    private struct StubCodexGenerator: CodexCLIGenerating {
+        let recorder: CodexCallRecorder
+        let response: String
+        func generate(prompt: String, reasoningEffort: String) async throws -> String {
+            await recorder.append(prompt: prompt, effort: reasoningEffort)
+            return response
+        }
+    }
+
+    private struct FailingCodexGenerator: CodexCLIGenerating {
+        func generate(prompt: String, reasoningEffort: String) async throws -> String {
+            throw CodexTestError.failed
+        }
+    }
+
+    func testCodexCLIProviderIsNotesOnlyCloudAndNotTreatedAsLocal() throws {
+        let codex = try XCTUnwrap(ProviderCatalog.builtIn.first { $0.id == "codex-cli" })
+        XCTAssertEqual(codex.notesStyle, "codex-cli")
+        XCTAssertNil(codex.transcribeStyle)
+        XCTAssertEqual(codex.notesReasoningEffort, "none")
+        XCTAssertEqual(try Pipelines.makeNotesWriter(notes: codex, notesKey: nil).label,
+                       "Codex CLI · gpt-6-luna")
+    }
+
+    func testCodexCLIWriterPassesReasoningEffortAndUsesExistingOutputContract() async throws {
+        let recorder = CodexCallRecorder()
+        let response = "---POLISHED---\n# Biên bản\n- Quyết định\n---SUMMARY---\n## Tóm tắt\n- Quyết định"
+        let writer = CodexCLINotesWriter(
+            reasoningEffort: "medium",
+            generator: StubCodexGenerator(recorder: recorder, response: response))
+
+        let result = try await writer.notes(
+            transcript: "[00:01] An: Chốt phương án.", progress: { _ in })
+        let calls = await recorder.snapshot()
+
+        XCTAssertEqual(result.polished, "# Biên bản\n- Quyết định")
+        XCTAssertEqual(result.summary, "## Tóm tắt\n- Quyết định")
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls.first?.effort, "medium")
+        XCTAssertTrue(calls.first?.prompt.contains("[00:01] An: Chốt phương án.") == true)
+    }
+
+    func testCodexCLIWriterPassesConfiguredLanguageIntoPrompt() async throws {
+        let recorder = CodexCallRecorder()
+        let response = "---POLISHED---\np\n---SUMMARY---\ns"
+        let writer = CodexCLINotesWriter(
+            language: "English",
+            generator: StubCodexGenerator(recorder: recorder, response: response))
+
+        _ = try await writer.notes(transcript: "[00:01] An: test.", progress: { _ in })
+        let calls = await recorder.snapshot()
+
+        XCTAssertTrue(calls.first?.prompt.contains("LANGUAGE = English") == true)
+    }
+
+    func testCodexCLIWriterDefaultsToConfiguredDefaultLanguage() async throws {
+        let recorder = CodexCallRecorder()
+        let response = "---POLISHED---\np\n---SUMMARY---\ns"
+        let writer = CodexCLINotesWriter(
+            generator: StubCodexGenerator(recorder: recorder, response: response))
+
+        _ = try await writer.notes(transcript: "[00:01] An: test.", progress: { _ in })
+        let calls = await recorder.snapshot()
+
+        XCTAssertTrue(calls.first?.prompt.contains("LANGUAGE = \(Prompts.defaultNotesLanguage)") == true)
+    }
+
+    func testCodexCLIWriterFallsBackToNoneForInvalidStoredEffort() throws {
+        let writer = CodexCLINotesWriter(reasoningEffort: "not-a-real-effort",
+                                         generator: FailingCodexGenerator())
+        XCTAssertEqual(writer.reasoningEffort, "none")
+    }
+
+    func testCodexCLITemplateModeReturnsRawOutputForBothSections() async throws {
+        let recorder = CodexCallRecorder()
+        let writer = CodexCLINotesWriter(
+            template: "# Mẫu",
+            generator: StubCodexGenerator(recorder: recorder, response: "# Đã điền mẫu"))
+
+        let result = try await writer.notes(transcript: "[00:01] An: nội dung.", progress: { _ in })
+
+        XCTAssertEqual(result.polished, "# Đã điền mẫu")
+        XCTAssertEqual(result.summary, "# Đã điền mẫu")
+        let calls = await recorder.snapshot()
+        XCTAssertTrue(calls.first?.prompt.contains("# Mẫu") == true)
+    }
+
+    func testCodexCLIMissingMarkersRaisesRatherThanReturningPartialNotes() async throws {
+        let recorder = CodexCallRecorder()
+        let writer = CodexCLINotesWriter(
+            generator: StubCodexGenerator(recorder: recorder, response: "no markers at all"))
+
+        do {
+            _ = try await writer.notes(transcript: "[00:01] An: nội dung.", progress: { _ in })
+            XCTFail("Expected a badResponse error for missing POLISHED/SUMMARY markers")
+        } catch PipelineError.badResponse { }
+    }
+
+    func testCodexCLIFailureDoesNotFallbackOrModifyTranscript() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meetgist-codex-notes-failure-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let original = "[00:01] Me: Keep this transcript unchanged."
+        try original.write(to: root.appendingPathComponent("transcript.md"),
+                           atomically: true, encoding: .utf8)
+        let writer = CodexCLINotesWriter(generator: FailingCodexGenerator())
+
+        do {
+            _ = try await MeetingProcessor.generateNotes(
+                sessionDir: root, writer: writer, providerName: "Codex CLI",
+                progress: { _ in })
+            XCTFail("Expected the injected Codex CLI failure")
+        } catch CodexTestError.failed { }
+
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("transcript.md")), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("polished.md").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("summary.md").path))
+    }
+
+    func testCodexCLIEmptyTranscriptRaisesBeforeInvokingGenerator() async throws {
+        let recorder = CodexCallRecorder()
+        let writer = CodexCLINotesWriter(
+            generator: StubCodexGenerator(recorder: recorder, response: "unused"))
+
+        do {
+            _ = try await writer.notes(transcript: "   \n  ", progress: { _ in })
+            XCTFail("Expected badResponse for empty transcript")
+        } catch PipelineError.badResponse { }
+
+        XCTAssertTrue(await recorder.snapshot().isEmpty)
     }
 }

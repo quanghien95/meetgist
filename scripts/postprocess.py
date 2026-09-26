@@ -128,6 +128,9 @@ Output in EXACTLY this format:
 
 ## Recording Information
 - **Duration**: ...
+- **Attendees**: comma-separated list of every distinct speaker name/label
+  that appears in the transcript (e.g. "Me, Alice, Bob"). Use whatever
+  labels the transcript uses (names if known, otherwise "Speaker 1" etc.).
 - **Number of participants**: ...
 - **Content type**: ...
 
@@ -143,9 +146,6 @@ Output in EXACTLY this format:
 ## Selected Quotes
 - "..." (Speaker Name) — (Strategic insight / Thinking inspiration / Key decision)
 ...
-
-## To-do Items
-- [ ] Owner - task description
 
 ## Per-Speaker Stance
 - **Speaker Name**:
@@ -175,7 +175,7 @@ Rules:
   reading. Meaning preserved, no new information added.
   Write entirely in LANGUAGE.
   If LANGUAGE is Simplified Chinese: use natural Chinese section headings
-  (e.g. "📑 智能摘要", "📋 待办事项", "✨ 精选语录", "📅 章节摘要", "👥 各发言人立场").
+  (e.g. "📑 智能摘要", "✨ 精选语录", "📅 章节摘要", "👥 各发言人立场").
   If LANGUAGE is English: use English section headings.
 - SUMMARY (everything after ---SUMMARY---): write entirely in LANGUAGE,
   headings included. Do NOT mix languages.

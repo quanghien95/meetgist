@@ -10,18 +10,49 @@ struct MeetingDetailView: View {
     let meeting: Meeting
     @State private var tab = Tab.summary
     @State private var showRetranscribeConfirmation = false
+    @State private var isEditingTitle = false
+    @State private var titleDraft = ""
+    @FocusState private var titleFieldFocused: Bool
+    // Reading transcript.md/polished.md/summary.md and parsing the Markdown into
+    // an AttributedString were both happening synchronously inside `body` (a
+    // computed property + a plain function), so SwiftUI re-ran that file read
+    // and full Markdown parse on every redraw, not just on selection — the
+    // measured 1-2s open lag. Now loaded once per (meeting, tab) off the main
+    // thread in `.task`, and cached here instead of recomputed per body pass.
+    @State private var renderedContent: AttributedString?
+    @State private var rawContent: String?
+    @State private var contentStats: (words: Int, characters: Int)?
+    // The transcript tab renders one row per `[MM:SS] Speaker: …` line in a
+    // LazyVStack instead of one giant Text(AttributedString): a single Text
+    // forces SwiftUI to lay out the entire transcript (often 1000+ lines) up
+    // front even though only a screenful is visible, which is the remaining
+    // per-tab-switch cost after the async load fix. Markdown parsing is also
+    // skipped for this tab since transcript.md is plain timestamped lines,
+    // not Markdown — parsing it was pure overhead.
+    @State private var transcriptLines: [String]?
 
     enum Tab: Hashable { case summary, minutes, transcript, postProcess }
 
     private var file: String {
         switch tab { case .summary: return "summary.md"; case .minutes: return "polished.md"; case .transcript: return "transcript.md"; case .postProcess: return PostProcessRunner.outputFile }
     }
-    private var content: String? { MeetingStore.markdown(file, in: meeting.dir) }
     private var processingThis: Bool { state.state == .processing && state.selectedID == meeting.id }
     private var hasMic: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("mic.m4a").path) }
     private var hasSystem: Bool { FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent("system.m4a").path) }
     private var offlineJob: OfflineJobState? { state.offlineJob(for: meeting) }
-    private var isOfflineMeeting: Bool { offlineJob != nil }
+    /// `offlineJob` only reflects `OfflineJobCoordinator`'s in-memory dictionary,
+    /// which is populated by `scan()` at launch/import/delete — not by every
+    /// path that can leave a meeting selected. A meeting genuinely transcribed
+    /// offline always leaves a `transcription/` state directory on disk, so
+    /// check that too rather than trusting only the in-memory job to still be
+    /// there. Without this, "Regenerate Minutes" and "Re-transcribe" could both
+    /// silently vanish for an already-transcribed meeting whenever the
+    /// in-memory job state doesn't happen to cover it.
+    private var isOfflineMeeting: Bool {
+        offlineJob != nil
+            || FileManager.default.fileExists(
+                atPath: meeting.dir.appendingPathComponent("transcription").path)
+    }
     private var reprocessDisabled: Bool {
         if state.usesOfflineTranscription {
             return [.recording, .paused, .processing].contains(state.state)
@@ -42,8 +73,15 @@ struct MeetingDetailView: View {
             header
             Divider().overlay(Theme.line)
             ScrollView {
-                if let c = content, !c.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(md(c)).textSelection(.enabled).font(Theme.ui(13))
+                if tab == .transcript, let lines = transcriptLines {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            Text(line).textSelection(.enabled).font(Theme.ui(13))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }.padding(18)
+                } else if let c = renderedContent {
+                    Text(c).textSelection(.enabled).font(Theme.ui(13))
                         .frame(maxWidth: .infinity, alignment: .leading).padding(18)
                 } else {
                     placeholder.padding(40)
@@ -51,6 +89,9 @@ struct MeetingDetailView: View {
             }
         }
         .background(Theme.bg)
+        .task(id: TaskKey(meetingID: meeting.id, tab: tab, processing: state.state == .processing)) {
+            await loadContent()
+        }
         .confirmationDialog(
             loc.t(L.retranscribeConfirmation),
             isPresented: $showRetranscribeConfirmation,
@@ -65,14 +106,83 @@ struct MeetingDetailView: View {
         }
     }
 
+    private struct TaskKey: Equatable {
+        let meetingID: String
+        let tab: Tab
+        let processing: Bool
+    }
+
+    /// Reads the current tab's file and parses Markdown off the main thread,
+    /// then hops back to publish the result. Re-runs when the meeting, the tab,
+    /// or the processing flag (Generate/Regenerate finishing) changes — see
+    /// `.task(id:)` above — so a completed Generate refreshes the same tab
+    /// without needing a manual reload trigger.
+    private func loadContent() async {
+        // Clear the previous meeting/tab's cached content immediately so a
+        // stale render never flashes while the new file loads off-main.
+        rawContent = nil
+        renderedContent = nil
+        contentStats = nil
+        transcriptLines = nil
+        let dir = meeting.dir, currentFile = file, currentTab = tab
+        let loaded = await Task.detached(priority: .userInitiated) { () -> (String?, AttributedString?, [String]?, (Int, Int)?) in
+            guard let text = MeetingStore.markdown(currentFile, in: dir),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return (nil, nil, nil, nil) }
+            let words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+            let characters = text.count
+            let stats = (words, characters)
+            if currentTab == .transcript {
+                // Plain timestamped lines, not Markdown — splitting is far
+                // cheaper than a Markdown parse, and lets the LazyVStack lay
+                // out only the rows that scroll into view.
+                let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+                return (text, nil, lines, stats)
+            }
+            let attributed = (try? AttributedString(
+                markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                ?? AttributedString(text)
+            return (text, attributed, nil, stats)
+        }.value
+        guard !Task.isCancelled else { return }
+        rawContent = loaded.0
+        renderedContent = loaded.1
+        transcriptLines = loaded.2
+        contentStats = loaded.3.map { (words: $0.0, characters: $0.1) }
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(meeting.title).font(Theme.ui(17, .semibold)).foregroundStyle(Theme.text)
+                    if isEditingTitle {
+                        TextField("", text: $titleDraft)
+                            .textFieldStyle(.plain)
+                            .font(Theme.ui(17, .semibold)).foregroundStyle(Theme.text)
+                            .focused($titleFieldFocused)
+                            .onSubmit { commitTitleEdit() }
+                            .onExitCommand { isEditingTitle = false }
+                            .onChange(of: titleFieldFocused) { _, focused in
+                                // Clicking away from the field is a natural way
+                                // to "finish" editing — commit rather than
+                                // silently discarding what was typed.
+                                if !focused && isEditingTitle { commitTitleEdit() }
+                            }
+                    } else {
+                        Text(meeting.title).font(Theme.ui(17, .semibold)).foregroundStyle(Theme.text)
+                            .onTapGesture { beginTitleEdit() }
+                            .help(loc.t(L.rename))
+                    }
                     HStack(spacing: 10) {
                         if let d = meeting.date {
                             Text(d, format: .dateTime.weekday().month().day().hour().minute())
+                                .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                        }
+                        if let duration = meeting.formattedDuration {
+                            Text("· \(duration)").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                        }
+                        if let stats = contentStats {
+                            Text("· \(stats.words) words · \(stats.characters) chars")
                                 .font(Theme.mono(10)).foregroundStyle(Theme.muted)
                         }
                         // Audio tracks status
@@ -121,7 +231,22 @@ struct MeetingDetailView: View {
                 }
                 Spacer()
             }
-            if let job = offlineJob { offlineProgress(job) }
+            if let job = offlineJob, job.status != .completed {
+                offlineProgress(job)
+            } else if isOfflineMeeting && hasTranscript {
+                // Once transcription is done, the progress card (100% bar,
+                // per-track "Completed" rows, ETA) has nothing left to say —
+                // only the retry action is still relevant. This also covers
+                // the case where the in-memory job state is gone (e.g. after
+                // an app relaunch) but transcript.md still exists on disk —
+                // `offlineJob` alone would hide this button entirely then.
+                HStack {
+                    Spacer()
+                    Button(loc.t(L.retranscribe)) { showRetranscribeConfirmation = true }
+                        .buttonStyle(GhostButton())
+                        .disabled(state.state == .processing)
+                }
+            }
         }
         .padding(16)
     }
@@ -168,6 +293,16 @@ struct MeetingDetailView: View {
                                   || !state.canStartTranscription)
                 } else if offlineJob?.status == .failed {
                     Button(loc.t(L.retry)) { state.retryOffline(meeting) }.buttonStyle(MintButton())
+                        .disabled([.recording, .paused, .processing].contains(state.state)
+                                  || !state.canStartTranscription)
+                } else {
+                    // No job at all yet — this meeting has never been
+                    // transcribed (imported audio, or offline transcription
+                    // wasn't selected at recording time). `resumeOffline`
+                    // starts a fresh job from scratch just as well as it
+                    // resumes an interrupted one — `coordinator.start(...)`
+                    // doesn't require prior state to exist.
+                    Button(loc.t(L.transcribe)) { state.resumeOffline(meeting) }.buttonStyle(MintButton())
                         .disabled([.recording, .paused, .processing].contains(state.state)
                                   || !state.canStartTranscription)
                 }
@@ -260,8 +395,21 @@ struct MeetingDetailView: View {
     }
 
     private func copy() {
-        guard let c = content else { return }
+        guard let c = rawContent else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(c, forType: .string)
+    }
+
+    private func beginTitleEdit() {
+        titleDraft = meeting.title
+        isEditingTitle = true
+        titleFieldFocused = true
+    }
+
+    private func commitTitleEdit() {
+        isEditingTitle = false
+        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != meeting.title else { return }
+        state.renameMeeting(meeting, to: trimmed)
     }
 
     private func exportAs(_ f: Exporter.Format) {
@@ -281,8 +429,4 @@ struct MeetingDetailView: View {
         }
     }
 
-    private func md(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(s)
-    }
 }
