@@ -18,8 +18,11 @@ struct SettingsView: View {
             HStack {
                 Text(loc.t(L.settings)).font(Theme.ui(17, .semibold)).foregroundStyle(Theme.text)
                 Spacer()
-                Button(loc.t(L.done)) { dismiss() }.keyboardShortcut(.defaultAction)
-            }.padding()
+                Button(loc.t(L.done)) { dismiss() }
+                    .buttonStyle(MintButton())
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 14)
             Divider().overlay(Theme.line)
 
             ScrollView {
@@ -38,9 +41,9 @@ struct SettingsView: View {
                                 Picker("", selection: $state.presence) {
                                     Text(loc.t(L.presenceMenuBar)).tag(Presence.menuBar)
                                     Text(loc.t(L.presenceMini)).tag(Presence.mini)
-                                }.labelsHidden().pickerStyle(.segmented)
+                                }.labelsHidden().pickerStyle(.segmented).tint(Theme.controlTint)
                             }
-                        }.padding(6)
+                        }
                     }
 
                     // Hotkey
@@ -49,7 +52,7 @@ struct SettingsView: View {
                             Text("\(loc.t(L.start)) / \(loc.t(L.stop))").frame(width: 160, alignment: .leading)
                             KeyboardShortcuts.Recorder(for: .toggleRecord)
                             Spacer()
-                        }.padding(6)
+                        }
                     }
 
                     // Audio permissions
@@ -64,11 +67,14 @@ struct SettingsView: View {
                                 Spacer()
                                 Button("Change…") { chooseFolder() }
                             }
-                            Toggle(loc.t(L.autoTranscribe), isOn: $state.autoTranscribe)
-                            Toggle(loc.t(L.autoGenerateNotes), isOn: $state.autoGenerateNotes)
-                            Toggle("Detect Google Meet and Microsoft Teams", isOn: $state.detectMeetings)
-                            LaunchAtLoginToggle().environmentObject(loc)
-                        }.padding(6)
+                            Group {
+                                Toggle(loc.t(L.autoTranscribe), isOn: $state.autoTranscribe)
+                                Toggle(loc.t(L.autoGenerateNotes), isOn: $state.autoGenerateNotes)
+                                Toggle("Detect Google Meet and Microsoft Teams", isOn: $state.detectMeetings)
+                                LaunchAtLoginToggle().environmentObject(loc)
+                            }
+                            .tint(Theme.controlTint)
+                        }
                     }
 
                     // AI provider (v1.1 slots)
@@ -81,7 +87,7 @@ struct SettingsView: View {
                                          providers: state.notesProviders,
                                          selection: $state.notesProviderID, slot: .notes)
                             CustomProvidersView()
-                        }.padding(6)
+                        }
                     }
 
                     GroupBox("Notes language") {
@@ -91,11 +97,11 @@ struct SettingsView: View {
                                 Picker("", selection: $state.notesLanguage) {
                                     Text("Vietnamese").tag("Vietnamese")
                                     Text("English").tag("English")
-                                }.labelsHidden().pickerStyle(.segmented).frame(width: 220)
+                                }.labelsHidden().pickerStyle(.segmented).tint(Theme.controlTint).frame(width: 220)
                             }
                             Text("Applies to Meeting Minutes and Summary for every Notes provider. Chinese transcripts still generate Chinese output regardless of this setting.")
                                 .font(.caption).foregroundStyle(.secondary)
-                        }.padding(6)
+                        }
                     }
 
                     TemplateSettings().environmentObject(state).environmentObject(loc)
@@ -103,27 +109,34 @@ struct SettingsView: View {
                     GroupBox("Post-process script") {
                         VStack(alignment: .leading, spacing: 10) {
                             Toggle("Run automatically after Minutes are ready", isOn: $state.postProcessEnabled)
+                                .tint(Theme.controlTint)
                             Text("Python runs locally with meeting values exposed as environment variables. Its stdout and stderr are saved with the meeting.")
                                 .font(.caption).foregroundStyle(.secondary)
                             TextEditor(text: $state.postProcessSource)
                                 .font(Theme.mono(11))
                                 .frame(height: 150)
-                                .border(Theme.line)
+                                .scrollContentBackground(.hidden)
+                                .padding(6)
+                                .background(Theme.bg)
+                                .clipShape(RoundedRectangle(cornerRadius: 7))
+                                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.line, lineWidth: 1))
                             Text("MEETGIST_RECORDING_PATH · MEETGIST_MICROPHONE_PATH · MEETGIST_TRANSCRIPT · MEETGIST_MINUTES · MEETGIST_SUMMARY · MEETGIST_MEETING_TITLE · MEETGIST_MEETING_DATE · MEETGIST_MEETING_DIR · MEETGIST_MEETING_ID")
                                 .font(Theme.mono(9)).foregroundStyle(Theme.muted)
-                        }.padding(6)
+                        }
                     }
 
                     GroupBox(loc.t(L.privacy)) {
-                        Text(loc.t(L.privacyStatement)).font(.callout).foregroundStyle(.secondary).padding(6)
+                        Text(loc.t(L.privacyStatement)).font(.callout).foregroundStyle(.secondary)
                     }
                     GroupBox(loc.t(L.about)) {
-                        Text(loc.t(L.aboutFree)).font(.callout).foregroundStyle(.secondary).padding(6)
+                        Text(loc.t(L.aboutFree)).font(.callout).foregroundStyle(.secondary)
                     }
-                }.padding()
+                }
+                .groupBoxStyle(CardGroupBoxStyle())
+                .padding(20)
             }
         }
-        .frame(width: 600, height: 680)
+        .frame(width: 640, height: 720)
         .background(Theme.bg)
     }
 
@@ -179,7 +192,7 @@ struct ProviderSlot: View {
                     }
                     HStack(spacing: 6) {
                         Image(systemName: state.hasKey(selected) ? "checkmark.seal.fill" : "exclamationmark.triangle")
-                            .foregroundStyle(state.hasKey(selected) ? .green : .orange)
+                            .foregroundStyle(state.hasKey(selected) ? Theme.mint : Theme.amber)
                         let override = state.modelOverride(selected, slot: slot)
                         Text(state.hasKey(selected)
                              ? "Key set · model: \(override.isEmpty ? defaultModel : override)"
@@ -190,7 +203,7 @@ struct ProviderSlot: View {
                         }
                     }
                 }
-            }.padding(6)
+            }
         }
     }
 }
@@ -260,7 +273,7 @@ struct OfflineProviderSettings: View {
                 .font(.callout).foregroundStyle(.secondary)
         case .ready:
             Label(loc.t(L.ready), systemImage: "checkmark.seal.fill")
-                .font(.callout).foregroundStyle(.green)
+                .font(.callout).foregroundStyle(Theme.mint)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.callout).foregroundStyle(Theme.amber)
@@ -335,7 +348,7 @@ struct QwenASRProviderSettings: View {
                 .font(.callout).foregroundStyle(.secondary)
         case .ready:
             Label(loc.t(L.ready), systemImage: "checkmark.seal.fill")
-                .font(.callout).foregroundStyle(.green)
+                .font(.callout).foregroundStyle(Theme.mint)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.callout).foregroundStyle(Theme.amber)
@@ -375,7 +388,7 @@ struct AppleOnDeviceProviderSettings: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: availability.isReady ? "checkmark.seal.fill" : "exclamationmark.triangle")
-                    .foregroundStyle(availability.isReady ? .green : Theme.amber)
+                    .foregroundStyle(availability.isReady ? Theme.mint : Theme.amber)
                 Text(availability.message).font(.callout).foregroundStyle(.secondary)
             }
             Text("Apple Intelligence processes the transcript on-device. The system model is managed by macOS; MeetGist does not download a separate model.")
@@ -469,7 +482,7 @@ struct QwenLocalNotesProviderSettings: View {
                 .font(.callout).foregroundStyle(.secondary)
         case .ready:
             Label(loc.t(L.ready), systemImage: "checkmark.seal.fill")
-                .font(.callout).foregroundStyle(.green)
+                .font(.callout).foregroundStyle(Theme.mint)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.callout).foregroundStyle(Theme.amber)
@@ -516,7 +529,7 @@ struct CodexCLIProviderSettings: View {
     @ViewBuilder private var installStatus: some View {
         if CodexCLIAvailability.isInstalled {
             Label("Codex CLI found", systemImage: "checkmark.seal.fill")
-                .font(.callout).foregroundStyle(.green)
+                .font(.callout).foregroundStyle(Theme.mint)
         } else {
             Label("Codex CLI not found — install it and run `codex login`",
                   systemImage: "exclamationmark.triangle")
@@ -534,7 +547,8 @@ struct CustomProvidersView: View {
                 Button { state.addCustomProvider() } label: { Label("Add custom provider", systemImage: "plus") }
                 Text("Add any OpenAI-compatible chat API — DeepSeek, Moonshot/Kimi, a local server, etc. They appear in the Notes picker above.")
                     .font(.caption).foregroundStyle(.secondary)
-            }.padding(6)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -586,7 +600,6 @@ struct AudioSettings: View {
                 permRow(loc.t(L.microphone), ok: micOK, pane: "Privacy_Microphone")
                 permRow(loc.t(L.screenRecording), ok: screenOK, pane: "Privacy_ScreenCapture")
             }
-            .padding(6)
             .onAppear {
                 micOK = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
                 screenOK = CGPreflightScreenCaptureAccess()
@@ -632,6 +645,7 @@ struct TemplateSettings: View {
         GroupBox(loc.t(L.templateSection)) {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle(loc.t(L.useTemplateLabel), isOn: $state.useTemplate)
+                    .tint(Theme.controlTint)
 
                 // Reference templates — the built-in structures, ready to view and tweak.
                 VStack(alignment: .leading, spacing: 4) {
@@ -658,7 +672,7 @@ struct TemplateSettings: View {
                     .frame(height: 130)
                     .scrollContentBackground(.hidden)
                     .padding(6)
-                    .background(Theme.panel2)
+                    .background(Theme.bg)
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.line, lineWidth: 1))
                     .disabled(!state.useTemplate)
@@ -668,7 +682,7 @@ struct TemplateSettings: View {
                     Spacer()
                 }
                 Text(loc.t(L.templateHint)).font(.caption).foregroundStyle(.secondary)
-            }.padding(6)
+            }
         }
     }
 

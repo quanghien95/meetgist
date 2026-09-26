@@ -169,37 +169,47 @@ struct MeetingRow: View {
     let canManage: Bool
     let onRename: () -> Void
     let onDelete: () -> Void
+    private var status: (color: Color, label: String) {
+        if meeting.hasNotes { return (Theme.mint, loc.t(L.summary)) }
+        if meeting.hasTranscript { return (Theme.teal, loc.t(L.transcript)) }
+        return (Theme.muted, loc.t(L.saved))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(meeting.title).font(Theme.ui(13)).foregroundStyle(Theme.text).lineLimit(1)
-            HStack(spacing: 8) {
-                if let d = meeting.date {
-                    Text(d, format: .dateTime.month().day().hour().minute())
-                        .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(meeting.title).font(Theme.ui(13)).foregroundStyle(Theme.text)
+                    .lineLimit(1).truncationMode(.tail)
+                // The sidebar is narrow: a full "● Transcript" pill here pushed the
+                // date into "24 Sep a…". A status dot (label in the tooltip and in
+                // the detail view) keeps the date and duration fully readable.
+                HStack(spacing: 6) {
+                    Circle().fill(status.color).frame(width: 6, height: 6)
+                        .help(status.label)
+                    if let d = meeting.date {
+                        Text(d, format: .dateTime.day().month(.abbreviated).hour().minute())
+                            .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
+                    }
+                    if let duration = meeting.formattedDuration {
+                        Text("· \(duration)").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                            .lineLimit(1).fixedSize()
+                    }
                 }
-                if let duration = meeting.formattedDuration {
-                    Text("· \(duration)").font(Theme.mono(10)).foregroundStyle(Theme.muted)
-                }
-                Spacer()
-                if meeting.hasNotes {
-                    StatusPill(color: Theme.mint, text: loc.t(L.summary))
-                } else if meeting.hasTranscript {
-                    StatusPill(color: Theme.teal, text: loc.t(L.transcript))
-                } else {
-                    StatusPill(color: Theme.muted, text: loc.t(L.saved))
-                }
-                Menu {
-                    Button(loc.t(L.rename), action: onRename)
-                    Button(loc.t(L.moveToTrash), role: .destructive, action: onDelete)
-                } label: {
-                    Image(systemName: "ellipsis").frame(width: 18, height: 18)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .disabled(!canManage)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Menu {
+                Button(loc.t(L.rename), action: onRename)
+                Button(loc.t(L.moveToTrash), role: .destructive, action: onDelete)
+            } label: {
+                Image(systemName: "ellipsis").foregroundStyle(Theme.muted).frame(width: 18, height: 18)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .tint(Theme.muted)
+            .fixedSize()
+            .disabled(!canManage)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 }
 

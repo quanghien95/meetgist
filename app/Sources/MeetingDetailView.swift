@@ -19,7 +19,7 @@ struct MeetingDetailView: View {
     // and full Markdown parse on every redraw, not just on selection — the
     // measured 1-2s open lag. Now loaded once per (meeting, tab) off the main
     // thread in `.task`, and cached here instead of recomputed per body pass.
-    @State private var renderedContent: AttributedString?
+    @State private var renderedContent: [MarkdownBlock]?
     @State private var rawContent: String?
     @State private var contentStats: (words: Int, characters: Int)?
     // The transcript tab renders one row per `[MM:SS] Speaker: …` line in a
@@ -76,13 +76,15 @@ struct MeetingDetailView: View {
                 if tab == .transcript, let lines = transcriptLines {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                            Text(line).textSelection(.enabled).font(Theme.ui(13))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            TranscriptLineView(line: line)
                         }
-                    }.padding(18)
-                } else if let c = renderedContent {
-                    Text(c).textSelection(.enabled).font(Theme.ui(13))
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(18)
+                    }
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 22).padding(.vertical, 18)
+                } else if let blocks = renderedContent {
+                    MarkdownBlocksView(blocks: blocks)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 22).padding(.vertical, 18)
                 } else {
                     placeholder.padding(40)
                 }
@@ -125,7 +127,7 @@ struct MeetingDetailView: View {
         contentStats = nil
         transcriptLines = nil
         let dir = meeting.dir, currentFile = file, currentTab = tab
-        let loaded = await Task.detached(priority: .userInitiated) { () -> (String?, AttributedString?, [String]?, (Int, Int)?) in
+        let loaded = await Task.detached(priority: .userInitiated) { () -> (String?, [MarkdownBlock]?, [String]?, (Int, Int)?) in
             guard let text = MeetingStore.markdown(currentFile, in: dir),
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return (nil, nil, nil, nil) }
@@ -139,10 +141,7 @@ struct MeetingDetailView: View {
                 let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
                 return (text, nil, lines, stats)
             }
-            let attributed = (try? AttributedString(
-                markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-                ?? AttributedString(text)
-            return (text, attributed, nil, stats)
+            return (text, MarkdownBlock.parse(text), nil, stats)
         }.value
         guard !Task.isCancelled else { return }
         rawContent = loaded.0
@@ -170,31 +169,19 @@ struct MeetingDetailView: View {
                             }
                     } else {
                         Text(meeting.title).font(Theme.ui(17, .semibold)).foregroundStyle(Theme.text)
+                            .lineLimit(2)
                             .onTapGesture { beginTitleEdit() }
                             .help(loc.t(L.rename))
                     }
-                    HStack(spacing: 10) {
-                        if let d = meeting.date {
-                            Text(d, format: .dateTime.weekday().month().day().hour().minute())
-                                .font(Theme.mono(10)).foregroundStyle(Theme.muted)
-                        }
-                        if let duration = meeting.formattedDuration {
-                            Text("· \(duration)").font(Theme.mono(10)).foregroundStyle(Theme.muted)
-                        }
-                        if let stats = contentStats {
-                            Text("· \(stats.words) words · \(stats.characters) chars")
-                                .font(Theme.mono(10)).foregroundStyle(Theme.muted)
-                        }
-                        // Audio tracks status
-                        HStack(spacing: 4) {
-                            Circle().fill(hasMic ? Theme.mint : Theme.line).frame(width: 6, height: 6)
-                            Text(loc.t(L.me)).font(Theme.mono(9)).foregroundStyle(Theme.muted)
-                            Circle().fill(hasSystem ? Theme.teal : Theme.line).frame(width: 6, height: 6)
-                            Text(loc.t(L.system)).font(Theme.mono(9)).foregroundStyle(Theme.muted)
-                        }
+                    // Each item stays on one line; when the header is narrow the
+                    // word/char stats are dropped first instead of wrapping
+                    // the date and track labels mid-word.
+                    ViewThatFits(in: .horizontal) {
+                        metaRow(includeStats: true)
+                        metaRow(includeStats: false)
                     }
                 }
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 6) {
                     Menu {
                         ForEach(Exporter.Format.allCases, id: \.self) { f in
@@ -202,8 +189,15 @@ struct MeetingDetailView: View {
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up").font(.system(size: 12))
+                            .foregroundStyle(Theme.text)
                     }
-                    .menuStyle(.borderlessButton).fixedSize().help(loc.t(L.export))
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(Theme.text).fixedSize()
+                    .frame(width: 26, height: 24)
+                    .padding(.horizontal, 6).padding(.vertical, 4)
+                    .background(Theme.panel2)
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.line, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .help(loc.t(L.export))
                     iconButton("doc.on.doc", loc.t(L.copy)) { copy() }
                     iconButton("folder", loc.t(L.reveal)) { NSWorkspace.shared.open(meeting.dir) }
                     if isOfflineMeeting && hasTranscript {
@@ -217,10 +211,10 @@ struct MeetingDetailView: View {
                         iconButton("arrow.clockwise", loc.t(L.regenerate)) { state.reprocessSelected() }
                             .disabled(reprocessDisabled)
                     }
-                    Button("Run script") { state.runPostProcess(meeting) }
-                        .buttonStyle(GhostButton())
+                    iconButton("terminal", "Run post-process script") { state.runPostProcess(meeting) }
                         .disabled(state.state == .processing || state.postProcessSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                .fixedSize()
             }
             HStack(spacing: 6) {
                 segTab(loc.t(L.summary), .summary)
@@ -230,25 +224,51 @@ struct MeetingDetailView: View {
                     segTab("Post-process", .postProcess)
                 }
                 Spacer()
-            }
-            if let job = offlineJob, job.status != .completed {
-                offlineProgress(job)
-            } else if isOfflineMeeting && hasTranscript {
                 // Once transcription is done, the progress card (100% bar,
                 // per-track "Completed" rows, ETA) has nothing left to say —
-                // only the retry action is still relevant. This also covers
+                // only the retry action is still relevant, so it sits on the
+                // tab row instead of taking a row of its own. This also covers
                 // the case where the in-memory job state is gone (e.g. after
                 // an app relaunch) but transcript.md still exists on disk —
                 // `offlineJob` alone would hide this button entirely then.
-                HStack {
-                    Spacer()
-                    Button(loc.t(L.retranscribe)) { showRetranscribeConfirmation = true }
-                        .buttonStyle(GhostButton())
-                        .disabled(state.state == .processing)
+                if isOfflineMeeting && hasTranscript && (offlineJob == nil || offlineJob?.status == .completed) {
+                    Button { showRetranscribeConfirmation = true } label: {
+                        Label(loc.t(L.retranscribe), systemImage: "arrow.counterclockwise")
+                            .font(Theme.ui(12))
+                    }
+                    .buttonStyle(GhostButton(compact: true))
+                    .disabled(state.state == .processing)
                 }
+            }
+            if let job = offlineJob, job.status != .completed {
+                offlineProgress(job)
             }
         }
         .padding(16)
+    }
+
+    private func metaRow(includeStats: Bool) -> some View {
+        HStack(spacing: 10) {
+            if let d = meeting.date {
+                Text(d, format: .dateTime.weekday().month().day().hour().minute())
+            }
+            if let duration = meeting.formattedDuration {
+                Text("· \(duration)")
+            }
+            if includeStats, let stats = contentStats {
+                Text("· \(stats.words) words · \(stats.characters) chars")
+            }
+            // Audio tracks status
+            HStack(spacing: 4) {
+                Circle().fill(hasMic ? Theme.mint : Theme.line).frame(width: 6, height: 6)
+                Text(loc.t(L.me)).font(Theme.mono(9))
+                Circle().fill(hasSystem ? Theme.teal : Theme.line).frame(width: 6, height: 6)
+                    .padding(.leading, 4)
+                Text(loc.t(L.system)).font(Theme.mono(9))
+            }
+        }
+        .font(Theme.mono(10)).foregroundStyle(Theme.muted)
+        .lineLimit(1).fixedSize()
     }
 
     private func segTab(_ title: String, _ value: Tab) -> some View {
@@ -391,7 +411,7 @@ struct MeetingDetailView: View {
 
     private func iconButton(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).font(.system(size: 12)).frame(width: 26, height: 24) }
-            .buttonStyle(GhostButton()).help(help)
+            .buttonStyle(GhostButton(compact: true)).help(help)
     }
 
     private func copy() {
