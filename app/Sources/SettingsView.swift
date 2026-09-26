@@ -65,12 +65,12 @@ struct SettingsView: View {
                                 Text(state.outputDir.path).lineLimit(1).truncationMode(.middle)
                                     .font(Theme.mono(11)).foregroundStyle(Theme.muted)
                                 Spacer()
-                                Button("Change…") { chooseFolder() }
+                                Button(loc.t(L.change)) { chooseFolder() }
                             }
                             Group {
                                 Toggle(loc.t(L.autoTranscribe), isOn: $state.autoTranscribe)
                                 Toggle(loc.t(L.autoGenerateNotes), isOn: $state.autoGenerateNotes)
-                                Toggle("Detect Google Meet and Microsoft Teams", isOn: $state.detectMeetings)
+                                Toggle(loc.t(L.detectMeetingsLabel), isOn: $state.detectMeetings)
                                 LaunchAtLoginToggle().environmentObject(loc)
                             }
                             .tint(Theme.controlTint)
@@ -80,37 +80,37 @@ struct SettingsView: View {
                     // AI provider (v1.1 slots)
                     GroupBox(loc.t(L.aiProvider)) {
                         VStack(alignment: .leading, spacing: 14) {
-                            ProviderSlot(title: "Transcription  ·  audio → text",
+                            ProviderSlot(title: loc.t(L.transcriptionSlotTitle),
                                          providers: state.transcriptionProviders,
                                          selection: $state.transcriptionProviderID, slot: .transcribe)
-                            ProviderSlot(title: "Notes  ·  text → minutes & summary",
+                            ProviderSlot(title: loc.t(L.notesSlotTitle),
                                          providers: state.notesProviders,
                                          selection: $state.notesProviderID, slot: .notes)
                             CustomProvidersView()
                         }
                     }
 
-                    GroupBox("Notes language") {
+                    GroupBox(loc.t(L.notesLanguageSection)) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text("Output language").frame(width: 130, alignment: .leading)
+                                Text(loc.t(L.outputLanguage)).frame(width: 130, alignment: .leading)
                                 Picker("", selection: $state.notesLanguage) {
-                                    Text("Vietnamese").tag("Vietnamese")
-                                    Text("English").tag("English")
+                                    Text(loc.t(L.langVietnamese)).tag("Vietnamese")
+                                    Text(loc.t(L.langEnglish)).tag("English")
                                 }.labelsHidden().pickerStyle(.segmented).tint(Theme.controlTint).frame(width: 220)
                             }
-                            Text("Applies to Meeting Minutes and Summary for every Notes provider. Chinese transcripts still generate Chinese output regardless of this setting.")
+                            Text(loc.t(L.notesLanguageHint))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
 
                     TemplateSettings().environmentObject(state).environmentObject(loc)
 
-                    GroupBox("Post-process script") {
+                    GroupBox(loc.t(L.postProcessScriptSection)) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Toggle("Run automatically after Minutes are ready", isOn: $state.postProcessEnabled)
+                            Toggle(loc.t(L.postProcessAutoRun), isOn: $state.postProcessEnabled)
                                 .tint(Theme.controlTint)
-                            Text("Python runs locally with meeting values exposed as environment variables. Its stdout and stderr are saved with the meeting.")
+                            Text(loc.t(L.postProcessDescription))
                                 .font(.caption).foregroundStyle(.secondary)
                             TextEditor(text: $state.postProcessSource)
                                 .font(Theme.mono(11))
@@ -151,6 +151,7 @@ struct SettingsView: View {
 
 struct ProviderSlot: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
     let title: String
     let providers: [Provider]
     @Binding var selection: String
@@ -164,7 +165,7 @@ struct ProviderSlot: View {
     var body: some View {
         GroupBox(title) {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Provider", selection: $selection) {
+                Picker(loc.t(L.provider), selection: $selection) {
                     ForEach(providers) { Text($0.name).tag($0.id) }
                 }
                 if selected.transcribeStyle == .offline && slot == .transcribe {
@@ -181,13 +182,13 @@ struct ProviderSlot: View {
                     CodexCLIProviderSettings()
                 } else {
                     HStack {
-                        SecureField(state.hasKey(selected) ? "Key saved — paste to replace" : "API key", text: $keyInput)
-                        Button("Save") { state.saveKey(keyInput, for: selected); keyInput = "" }
+                        SecureField(state.hasKey(selected) ? loc.t(L.keySavedPasteToReplace) : loc.t(L.apiKey), text: $keyInput)
+                        Button(loc.t(L.save)) { state.saveKey(keyInput, for: selected); keyInput = "" }
                             .disabled(keyInput.isEmpty)
                     }
                     HStack {
-                        TextField("Model (default \(defaultModel))", text: $modelInput)
-                        Button("Set") { state.setModel(modelInput, for: selected, slot: slot); modelInput = "" }
+                        TextField(loc.t(L.modelDefaultLabel(defaultModel)), text: $modelInput)
+                        Button(loc.t(L.set)) { state.setModel(modelInput, for: selected, slot: slot); modelInput = "" }
                             .disabled(modelInput.isEmpty)
                     }
                     HStack(spacing: 6) {
@@ -195,11 +196,11 @@ struct ProviderSlot: View {
                             .foregroundStyle(state.hasKey(selected) ? Theme.mint : Theme.amber)
                         let override = state.modelOverride(selected, slot: slot)
                         Text(state.hasKey(selected)
-                             ? "Key set · model: \(override.isEmpty ? defaultModel : override)"
-                             : "No key yet.")
+                             ? loc.t(L.keySetModelLabel(override.isEmpty ? defaultModel : override))
+                             : loc.t(L.noKeyYet))
                             .font(.callout).foregroundStyle(.secondary)
                         if let help = selected.keyHelp, let u = URL(string: help) {
-                            Spacer(); Link("Get a key ↗", destination: u).font(.callout)
+                            Spacer(); Link(loc.t(L.getAKey), destination: u).font(.callout)
                         }
                     }
                 }
@@ -220,22 +221,22 @@ struct OfflineProviderSettings: View {
                 runtimeAction
             }
             runtimeStatus
-            Text("Model download: approximately \(ByteCountFormatter.string(fromByteCount: OfflineRuntimeManager.modelDownloadBytes, countStyle: .decimal)). Python runtime and packages need additional space.")
+            Text(loc.t(L.modelDownloadApprox(ByteCountFormatter.string(fromByteCount: OfflineRuntimeManager.modelDownloadBytes, countStyle: .decimal))))
                 .font(.caption).foregroundStyle(.secondary)
             if state.offlineRuntime.state == .installing {
                 ProgressView(value: state.offlineRuntime.installProgress)
             }
             HStack {
-                Text("Language").frame(width: 100, alignment: .leading)
+                Text(loc.t(L.language)).frame(width: 100, alignment: .leading)
                 Picker("", selection: $state.offlineLanguage) {
-                    Text("Auto-detect").tag("auto")
-                    Text("English").tag("en")
-                    Text("Chinese").tag("zh")
-                    Text("Spanish").tag("es")
-                    Text("French").tag("fr")
-                    Text("German").tag("de")
-                    Text("Japanese").tag("ja")
-                    Text("Korean").tag("ko")
+                    Text(loc.t(L.langAuto)).tag("auto")
+                    Text(loc.t(L.langEnglish)).tag("en")
+                    Text(loc.t(L.langChinese)).tag("zh")
+                    Text(loc.t(L.langSpanish)).tag("es")
+                    Text(loc.t(L.langFrench)).tag("fr")
+                    Text(loc.t(L.langGerman)).tag("de")
+                    Text(loc.t(L.langJapanese)).tag("ja")
+                    Text(loc.t(L.langKorean)).tag("ko")
                 }.labelsHidden()
             }
             HotwordsField()
@@ -264,7 +265,7 @@ struct OfflineProviderSettings: View {
                 Label(loc.t(L.notInstalled), systemImage: "arrow.down.circle")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                Label("Offline Local Whisper requires Apple Silicon.",
+                Label(loc.t(L.offlineWhisperRequiresAppleSilicon),
                       systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(Theme.amber)
             }
@@ -293,26 +294,26 @@ struct QwenASRProviderSettings: View {
                 runtimeAction
             }
             runtimeStatus
-            Text("Model download: approximately \(ByteCountFormatter.string(fromByteCount: Qwen3ASRRuntimeManager.modelDownloadBytes, countStyle: .decimal)). Python runtime and packages need additional space.")
+            Text(loc.t(L.modelDownloadApprox(ByteCountFormatter.string(fromByteCount: Qwen3ASRRuntimeManager.modelDownloadBytes, countStyle: .decimal))))
                 .font(.caption).foregroundStyle(.secondary)
             if state.qwenASRRuntime.state == .installing {
                 ProgressView(value: state.qwenASRRuntime.installProgress)
             }
             HStack {
-                Text("Language").frame(width: 100, alignment: .leading)
+                Text(loc.t(L.language)).frame(width: 100, alignment: .leading)
                 Picker("", selection: $state.offlineLanguage) {
-                    Text("Auto-detect").tag("auto")
-                    Text("English").tag("en")
-                    Text("Chinese").tag("zh")
-                    Text("Spanish").tag("es")
-                    Text("French").tag("fr")
-                    Text("German").tag("de")
-                    Text("Japanese").tag("ja")
-                    Text("Korean").tag("ko")
+                    Text(loc.t(L.langAuto)).tag("auto")
+                    Text(loc.t(L.langEnglish)).tag("en")
+                    Text(loc.t(L.langChinese)).tag("zh")
+                    Text(loc.t(L.langSpanish)).tag("es")
+                    Text(loc.t(L.langFrench)).tag("fr")
+                    Text(loc.t(L.langGerman)).tag("de")
+                    Text(loc.t(L.langJapanese)).tag("ja")
+                    Text(loc.t(L.langKorean)).tag("ko")
                 }.labelsHidden()
             }
             HotwordsField()
-            Text("Qwen3-ASR has no per-sentence timestamps: each 5-minute chunk becomes one transcript line instead of one per sentence.")
+            Text(loc.t(L.qwenASRNoTimestampsNote))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -339,7 +340,7 @@ struct QwenASRProviderSettings: View {
                 Label(loc.t(L.notInstalled), systemImage: "arrow.down.circle")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                Label("Offline Local Qwen3-ASR requires Apple Silicon.",
+                Label(loc.t(L.offlineQwenASRRequiresAppleSilicon),
                       systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(Theme.amber)
             }
@@ -360,26 +361,28 @@ struct QwenASRProviderSettings: View {
 /// uses it as an `initial_prompt`, Qwen3-ASR as its native `hotwords` list.
 struct HotwordsField: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
 
     var body: some View {
         HStack(spacing: 6) {
-            TextField("Hotwords / context keywords", text: $state.offlineVocabulary)
+            TextField(loc.t(L.hotwordsPlaceholder), text: $state.offlineVocabulary)
             Menu {
                 ForEach(HotwordPresets.all) { preset in
                     Button(preset.name) { state.offlineVocabulary = preset.keywords }
                 }
             } label: {
-                Label("Preset", systemImage: "list.bullet")
+                Label(loc.t(L.preset), systemImage: "list.bullet")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
-        Text("Comma-separated terms to bias transcription toward — jargon, product/client names, acronyms. Works with both Whisper and Qwen3-ASR. Pick a preset to replace the list, then edit freely. One local job and one five-minute chunk run at a time.")
+        Text(loc.t(L.hotwordsHint))
             .font(.caption).foregroundStyle(.secondary)
     }
 }
 
 struct AppleOnDeviceProviderSettings: View {
+    @EnvironmentObject var loc: Localization
     private var availability: AppleFoundationModelsAvailability {
         AppleFoundationModelsSupport.availability
     }
@@ -389,9 +392,11 @@ struct AppleOnDeviceProviderSettings: View {
             HStack(spacing: 6) {
                 Image(systemName: availability.isReady ? "checkmark.seal.fill" : "exclamationmark.triangle")
                     .foregroundStyle(availability.isReady ? Theme.mint : Theme.amber)
+                // `availability.message` is produced by MeetGistKit (out of
+                // this file's ownership) and stays English.
                 Text(availability.message).font(.callout).foregroundStyle(.secondary)
             }
-            Text("Apple Intelligence processes the transcript on-device. The system model is managed by macOS; MeetGist does not download a separate model.")
+            Text(loc.t(L.appleOnDeviceDescription))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -418,23 +423,23 @@ struct QwenLocalNotesProviderSettings: View {
                 runtimeAction
             }
             runtimeStatus
-            Text("Model download: approximately \(ByteCountFormatter.string(fromByteCount: LocalNotesRuntimeManager.modelDownloadBytes, countStyle: .decimal)). Python runtime and packages need additional space.")
+            Text(loc.t(L.modelDownloadApprox(ByteCountFormatter.string(fromByteCount: LocalNotesRuntimeManager.modelDownloadBytes, countStyle: .decimal))))
                 .font(.caption).foregroundStyle(.secondary)
             if state.localNotesRuntime.state == .installing {
                 ProgressView(value: state.localNotesRuntime.installProgress)
             }
-            Text("Runs fully offline after setup. Most meetings are processed directly; only very long transcripts are summarized in local chunks and reduced before final Meeting Minutes generation. No cloud fallback.")
+            Text(loc.t(L.qwenNotesRunsOfflineDescription))
                 .font(.caption).foregroundStyle(.secondary)
             if lastRunMetrics != nil {
-                Button("Last run metrics…") { showLastRunMetrics = true }
+                Button(loc.t(L.lastRunMetrics)) { showLastRunMetrics = true }
                     .controlSize(.small)
             }
         }
         .sheet(isPresented: $showLastRunMetrics) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Local Qwen · Last run metrics").font(.headline)
+                Text(loc.t(L.localQwenLastRunMetricsTitle)).font(.headline)
                 ScrollView {
-                    Text(lastRunMetrics ?? "Metrics file is no longer available.")
+                    Text(lastRunMetrics ?? loc.t(L.metricsFileUnavailable))
                         .font(Theme.mono(11))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -472,7 +477,7 @@ struct QwenLocalNotesProviderSettings: View {
                 Label(loc.t(L.notInstalled), systemImage: "arrow.down.circle")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                Label("Local Qwen Notes requires Apple Silicon.",
+                Label(loc.t(L.localQwenRequiresAppleSilicon),
                       systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(Theme.amber)
             }
@@ -492,6 +497,7 @@ struct QwenLocalNotesProviderSettings: View {
 
 struct CodexCLIProviderSettings: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
     private var provider: Provider { state.notesProvider }
 
     private var effortBinding: Binding<String> {
@@ -504,34 +510,36 @@ struct CodexCLIProviderSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Codex CLI · gpt-6-luna · via your ChatGPT subscription").font(.callout)
+                // "Codex CLI" and "gpt-6-luna" are product/model names and stay
+                // untranslated; only the trailing description is localized.
+                Text("Codex CLI · gpt-6-luna · \(loc.t(L.viaChatGPTSubscription))").font(.callout)
                 Spacer()
                 installStatus
             }
             HStack {
-                Text("Reasoning effort").frame(width: 130, alignment: .leading)
+                Text(loc.t(L.reasoningEffort)).frame(width: 130, alignment: .leading)
                 Picker("", selection: effortBinding) {
-                    Text("None (fastest, recommended)").tag("none")
-                    Text("Low").tag("low")
-                    Text("Medium").tag("medium")
-                    Text("High").tag("high")
-                    Text("Extra high").tag("xhigh")
-                    Text("Max").tag("max")
+                    Text(loc.t(L.effortNone)).tag("none")
+                    Text(loc.t(L.effortLow)).tag("low")
+                    Text(loc.t(L.effortMedium)).tag("medium")
+                    Text(loc.t(L.effortHigh)).tag("high")
+                    Text(loc.t(L.effortExtraHigh)).tag("xhigh")
+                    Text(loc.t(L.effortMax)).tag("max")
                 }.labelsHidden()
             }
-            Text("Runs the codex CLI already installed and logged in on this Mac (`codex login`). This is a cloud provider: the transcript is sent to OpenAI over your ChatGPT subscription session, the same as any other cloud Notes provider — it is not processed locally. Requires no API key.")
+            Text(loc.t(L.codexCLIDescription))
                 .font(.caption).foregroundStyle(.secondary)
-            Text("Benchmarked for meeting minutes: \"None\" gives the same factual accuracy as higher effort levels but is faster and cheaper — higher levels mainly spend extra reasoning tokens without improving this task's output.")
+            Text(loc.t(L.codexCLIBenchmarkNote))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder private var installStatus: some View {
         if CodexCLIAvailability.isInstalled {
-            Label("Codex CLI found", systemImage: "checkmark.seal.fill")
+            Label(loc.t(L.codexCLIFound), systemImage: "checkmark.seal.fill")
                 .font(.callout).foregroundStyle(Theme.mint)
         } else {
-            Label("Codex CLI not found — install it and run `codex login`",
+            Label(loc.t(L.codexCLINotFound),
                   systemImage: "exclamationmark.triangle")
                 .font(.callout).foregroundStyle(Theme.amber)
         }
@@ -540,12 +548,13 @@ struct CodexCLIProviderSettings: View {
 
 struct CustomProvidersView: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
     var body: some View {
-        GroupBox("Custom providers (OpenAI-compatible · for Notes)") {
+        GroupBox(loc.t(L.customProvidersSection)) {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(state.customProviders) { p in CustomProviderRow(initial: p) }
-                Button { state.addCustomProvider() } label: { Label("Add custom provider", systemImage: "plus") }
-                Text("Add any OpenAI-compatible chat API — DeepSeek, Moonshot/Kimi, a local server, etc. They appear in the Notes picker above.")
+                Button { state.addCustomProvider() } label: { Label(loc.t(L.addCustomProvider), systemImage: "plus") }
+                Text(loc.t(L.customProvidersHint))
                     .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -555,6 +564,7 @@ struct CustomProvidersView: View {
 
 struct CustomProviderRow: View {
     @EnvironmentObject var state: AppState
+    @EnvironmentObject var loc: Localization
     let initial: Provider
     @State private var name = ""
     @State private var baseURL = ""
@@ -564,21 +574,24 @@ struct CustomProviderRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                TextField("Name", text: $name)
+                TextField(loc.t(L.nameField), text: $name)
                 Button(role: .destructive) { state.removeCustom(initial) } label: { Image(systemName: "trash") }
             }
-            TextField("Base URL (e.g. https://api.deepseek.com/v1)", text: $baseURL)
-            TextField("Model (e.g. deepseek-v4-pro)", text: $model)
+            TextField(loc.t(L.baseURLPlaceholder), text: $baseURL)
+            TextField(loc.t(L.modelPlaceholder), text: $model)
             HStack {
-                SecureField(state.hasKey(initial) ? "Key saved — paste to replace" : "API key", text: $keyInput)
-                Button("Save") {
+                SecureField(state.hasKey(initial) ? loc.t(L.keySavedPasteToReplace) : loc.t(L.apiKey), text: $keyInput)
+                Button(loc.t(L.save)) {
                     var p = initial
+                    // "Custom" is the persisted fallback provider name (stored
+                    // in Provider.name), not a pure UI label — kept stable
+                    // across language switches rather than translated.
                     p.name = name.isEmpty ? "Custom" : name
                     p.baseURL = baseURL
                     p.notesModel = model
                     state.updateCustom(p)
                     if !keyInput.isEmpty { state.saveKey(keyInput, for: p); keyInput = "" }
-                    state.status = "Saved \(p.name)."
+                    state.status = loc.t(L.savedProviderName(p.name))
                 }
             }
             Divider()

@@ -76,7 +76,11 @@ pause / spinner / `!`), the **StatusPill** color, and the **HUD** glyph
 ## Bilingual (`app/Sources/Localization/L10n.swift`)
 Runtime layer (`Localization` + `L`): switching Language in Settings updates the UI
 **instantly** (Follow System / English / 简体中文), no restart. Every label has an
-EN + 中文 pair; UI metrics tolerate both lengths.
+EN + 中文 pair; UI metrics tolerate both lengths. `AppState` status/error text
+goes through the same layer (`tr(L.x)`); values that vary (percentages, names)
+use `L` functions returning an `LStr`, so each language keeps its own word
+order. Product/model names, env vars and stored values stay untranslated;
+progress text produced inside MeetGistKit is English.
 
 ## App icon
 Master `icon.png` → `scripts/make-icon.sh` rasterizes the `AppIcon.appiconset`.

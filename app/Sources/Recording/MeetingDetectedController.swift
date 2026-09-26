@@ -38,8 +38,12 @@ private struct MeetingDetectedView: View {
                 .buttonStyle(.plain)
                 .help("Dismiss")
             }
-            Text(title).font(Theme.ui(12)).foregroundStyle(Theme.muted)
+            Text(title).font(Theme.ui(12)).foregroundStyle(Theme.muted).lineLimit(2)
             Button("Record now", action: onRecord).buttonStyle(MintButton())
-        }.padding(14).frame(width: 285).background(Theme.panel.opacity(0.98)).clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .padding(14).frame(width: 285)
+        .background(Theme.panel.opacity(0.98))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }

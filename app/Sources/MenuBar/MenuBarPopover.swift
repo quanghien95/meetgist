@@ -23,6 +23,12 @@ struct MenuBarPopover: View {
             if isLive {
                 LabeledLevel(label: loc.t(L.me), level: state.micLevel, tint: Theme.mint)
                 LabeledLevel(label: loc.t(L.system), level: state.systemLevel, tint: Theme.teal)
+            } else if state.state == .processing || state.state == .error, !state.status.isEmpty {
+                // While a job runs (or just failed) the popover is where people
+                // look first — show what is happening instead of the tagline.
+                Text("▸ \(state.status)").font(Theme.mono(10))
+                    .foregroundStyle(state.state == .error ? Theme.amber : Theme.muted)
+                    .lineLimit(2)
             } else {
                 Text("▸ \(loc.t(L.tagline))").font(Theme.mono(10)).foregroundStyle(Theme.muted)
             }
@@ -44,6 +50,7 @@ struct MenuBarPopover: View {
                 row(loc.t(L.transcribeLatest), "text.viewfinder") {
                     if let m = state.meetings.first { state.process(m.dir) }
                 }
+                .disabled(isLive || state.state == .processing || state.meetings.isEmpty)
                 row(loc.t(L.settings), "gearshape") { state.showSettings = true; openMain() }
                 row(loc.t(L.quit), "power") { NSApp.terminate(nil) }
             }
@@ -59,15 +66,29 @@ struct MenuBarPopover: View {
     }
 
     private func row(_ title: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).frame(width: 16).foregroundStyle(Theme.muted)
-                Text(title).font(Theme.ui(13)).foregroundStyle(Theme.text)
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .padding(.vertical, 5).padding(.horizontal, 6)
+        Button(action: action) { MenuRowLabel(title: title, symbol: symbol) }
+            .buttonStyle(.plain)
+    }
+}
+
+/// A menu-style row with a subtle hover highlight, dimmed when disabled.
+private struct MenuRowLabel: View {
+    let title: String
+    let symbol: String
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).frame(width: 16).foregroundStyle(Theme.muted)
+            Text(title).font(Theme.ui(13)).foregroundStyle(Theme.text)
+            Spacer()
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 5).padding(.horizontal, 6)
+        .background(hovering && isEnabled ? Theme.panel2 : .clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .opacity(isEnabled ? 1 : 0.4)
+        .onHover { hovering = $0 }
     }
 }

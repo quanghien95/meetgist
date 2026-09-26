@@ -24,7 +24,7 @@ struct LibraryView: View {
     private var meetingsCountLabel: String {
         let count = state.meetings.count
         if loc.effective == .zh { return "\(count) \(loc.t(L.meetingsCount))" }
-        return count == 1 ? "1 meeting" : "\(count) \(loc.t(L.meetingsCount))"
+        return count == 1 ? loc.t(L.oneMeeting) : "\(count) \(loc.t(L.meetingsCount))"
     }
 
     /// Only the meeting actively being processed is locked; finished meetings

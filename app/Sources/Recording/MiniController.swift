@@ -76,8 +76,8 @@ private struct MiniControllerView: View {
                 }.buttonStyle(.plain).foregroundStyle(Theme.muted)
             }
             if !collapsed {
-                LevelBar(level: state.micLevel, tint: Theme.mint, segments: 18)
-                LevelBar(level: state.systemLevel, tint: Theme.teal, segments: 18)
+                miniLevel(loc.t(L.me), state.micLevel, Theme.mint)
+                miniLevel(loc.t(L.system), state.systemLevel, Theme.teal)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, collapsed ? 8 : 9)
@@ -85,5 +85,13 @@ private struct MiniControllerView: View {
         .background(Theme.panel.opacity(0.97))
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Theme.line, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
+    }
+
+    private func miniLevel(_ label: String, _ level: Double, _ tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(Theme.mono(8, .semibold)).foregroundStyle(Theme.muted)
+                .lineLimit(1).frame(width: 34, alignment: .leading)
+            LevelBar(level: level, tint: tint, segments: 20)
+        }
     }
 }

@@ -211,7 +211,7 @@ struct MeetingDetailView: View {
                         iconButton("arrow.clockwise", loc.t(L.regenerate)) { state.reprocessSelected() }
                             .disabled(reprocessDisabled)
                     }
-                    iconButton("terminal", "Run post-process script") { state.runPostProcess(meeting) }
+                    iconButton("terminal", loc.t(L.runPostProcessScript)) { state.runPostProcess(meeting) }
                         .disabled(state.state == .processing || state.postProcessSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 .fixedSize()
@@ -221,7 +221,7 @@ struct MeetingDetailView: View {
                 segTab(loc.t(L.minutes), .minutes)
                 segTab(loc.t(L.transcript), .transcript)
                 if state.postProcessEnabled || FileManager.default.fileExists(atPath: meeting.dir.appendingPathComponent(PostProcessRunner.outputFile).path) {
-                    segTab("Post-process", .postProcess)
+                    segTab(loc.t(L.postProcessTab), .postProcess)
                 }
                 Spacer()
                 // Once transcription is done, the progress card (100% bar,
@@ -256,7 +256,7 @@ struct MeetingDetailView: View {
                 Text("· \(duration)")
             }
             if includeStats, let stats = contentStats {
-                Text("· \(stats.words) words · \(stats.characters) chars")
+                Text(loc.t(L.statsWordsChars(words: stats.words, characters: stats.characters)))
             }
             // Audio tracks status
             HStack(spacing: 4) {
@@ -305,7 +305,9 @@ struct MeetingDetailView: View {
                               || !state.canGenerateMinutes)
             } else if state.usesOfflineTranscription {
                 Image(systemName: "waveform.badge.magnifyingglass").font(.title).foregroundStyle(Theme.muted)
-                Text(offlineJob?.lastError ?? "Local transcript is not ready.")
+                // `offlineJob?.lastError` is produced by MeetGistKit and stays
+                // English; only the "not ready yet" fallback is localized.
+                Text(offlineJob?.lastError ?? loc.t(L.localTranscriptNotReady))
                     .font(Theme.ui(12)).foregroundStyle(Theme.muted)
                 if let job = offlineJob, [.pending, .paused, .canceled].contains(job.status) {
                     Button(loc.t(L.resume)) { state.resumeOffline(meeting) }.buttonStyle(MintButton())
@@ -357,7 +359,7 @@ struct MeetingDetailView: View {
             trackProgress(loc.t(L.microphone), key: "mic", job: job)
             HStack {
                 if let eta = job.progress.etaSeconds, job.status == .transcribing {
-                    Text("ETA  \(formatETA(eta))").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                    Text("\(loc.t(L.etaLabel))  \(formatETA(eta))").font(Theme.mono(10)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
                 switch job.status {
@@ -396,17 +398,17 @@ struct MeetingDetailView: View {
             Spacer()
             if let track = job.tracks[key] {
                 let processed = job.progress.trackProcessedSeconds[key] ?? 0
-                Text(processed >= track.durationSeconds - 0.01 ? "Completed" : "\(Int(min(1, processed / max(0.001, track.durationSeconds)) * 100))%")
+                Text(processed >= track.durationSeconds - 0.01 ? loc.t(L.completedLabel) : "\(Int(min(1, processed / max(0.001, track.durationSeconds)) * 100))%")
                     .font(Theme.mono(10)).foregroundStyle(Theme.muted)
             } else {
-                Text("Skipped").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                Text(loc.t(L.skippedLabel)).font(Theme.mono(10)).foregroundStyle(Theme.muted)
             }
         }
     }
 
     private func formatETA(_ seconds: Int) -> String {
-        if seconds < 60 { return "< 1 min" }
-        return "\(Int(ceil(Double(seconds) / 60))) min"
+        if seconds < 60 { return loc.t(L.etaLessThanMinute) }
+        return loc.t(L.etaMinutes(Int(ceil(Double(seconds) / 60))))
     }
 
     private func iconButton(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
