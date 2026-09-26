@@ -37,7 +37,7 @@ fact. State uncertainty explicitly.
 | Apple on-device notes | `AppleFoundationModelsNotes.swift` |
 | Subprocess supervision (cancel/timeout/kill, pipe draining) | `ChildProcess.swift` |
 | Post-process script | `app/Sources/Automation/PostProcessRunner.swift` |
-| Tests | `tests/MeetGistKitTests` (Swift Testing), `tests/test_*.py` (unittest) |
+| Tests | `tests/MeetGistKitTests`, `tests/MeetGistAppTests` (both Swift Testing), `tests/test_*.py` (unittest) |
 
 ## Architecture invariants
 
@@ -86,8 +86,11 @@ or new persistence layer without an approved architecture decision.
 
 After changing code, run `make test` (Swift Testing + Python unittest; works
 with only the Command Line Tools) plus `swift build`, inspect the diff, and
-report unverified items. `app/Sources` has no test target, so AppState changes
-need manual verification. For API, schema, or
+report unverified items. `app/Sources` has a test target
+(`tests/MeetGistAppTests`, `@testable import MeetGistApp`) covering
+`AppState`'s processing lifecycle and settings via the injection points on
+`AppState.init`; real recording (`SessionRecorder`/ScreenCaptureKit) and OS
+permissions still need manual verification. For API, schema, or
 persisted-data changes, check producers, consumers, backward compatibility,
 retry/cancellation, and rollback behavior.
 

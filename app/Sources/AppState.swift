@@ -58,31 +58,58 @@ final class AppState: ObservableObject {
             scanOfflineCoordinators()
         }
     }
-    @Published var presence: Presence { didSet { UserDefaults.standard.set(presence.rawValue, forKey: Keys.presence) } }
-    @Published var autoTranscribe: Bool { didSet { UserDefaults.standard.set(autoTranscribe, forKey: Keys.auto) } }
-    @Published var detectMeetings: Bool { didSet { UserDefaults.standard.set(detectMeetings, forKey: Keys.detectMeetings) } }
-    @Published var autoGenerateNotes: Bool { didSet { UserDefaults.standard.set(autoGenerateNotes, forKey: Keys.autoGenerateNotes) } }
-    @Published var postProcessEnabled: Bool { didSet { UserDefaults.standard.set(postProcessEnabled, forKey: Keys.postProcessEnabled) } }
-    @Published var postProcessSource: String { didSet { UserDefaults.standard.set(postProcessSource, forKey: Keys.postProcessSource) } }
-    @Published var useTemplate: Bool { didSet { UserDefaults.standard.set(useTemplate, forKey: Keys.useTemplate) } }
-    @Published var notesTemplate: String { didSet { UserDefaults.standard.set(notesTemplate, forKey: Keys.template) } }
+    @Published var presence: Presence { didSet { defaults.set(presence.rawValue, forKey: Keys.presence) } }
+    @Published var autoTranscribe: Bool { didSet { defaults.set(autoTranscribe, forKey: Keys.auto) } }
+    @Published var detectMeetings: Bool { didSet { defaults.set(detectMeetings, forKey: Keys.detectMeetings) } }
+    @Published var autoGenerateNotes: Bool { didSet { defaults.set(autoGenerateNotes, forKey: Keys.autoGenerateNotes) } }
+    @Published var postProcessEnabled: Bool { didSet { defaults.set(postProcessEnabled, forKey: Keys.postProcessEnabled) } }
+    @Published var postProcessSource: String { didSet { defaults.set(postProcessSource, forKey: Keys.postProcessSource) } }
+    @Published var useTemplate: Bool { didSet { defaults.set(useTemplate, forKey: Keys.useTemplate) } }
+    @Published var notesTemplate: String { didSet { defaults.set(notesTemplate, forKey: Keys.template) } }
     /// Output language for generated Meeting Minutes/Summary, every notes
     /// provider (cloud and local). Defaults to Vietnamese regardless of the
     /// transcript's own language — Chinese transcripts still generate Chinese
     /// output (see `Prompts.polished`'s LANGUAGE rule), which takes precedence.
-    @Published var notesLanguage: String { didSet { UserDefaults.standard.set(notesLanguage, forKey: Keys.notesLanguage) } }
-    @Published var transcriptionProviderID: String { didSet { UserDefaults.standard.set(transcriptionProviderID, forKey: Keys.transcribe); refreshKeyFlag() } }
-    @Published var notesProviderID: String { didSet { UserDefaults.standard.set(notesProviderID, forKey: Keys.notes); refreshKeyFlag() } }
+    @Published var notesLanguage: String { didSet { defaults.set(notesLanguage, forKey: Keys.notesLanguage) } }
+    @Published var transcriptionProviderID: String { didSet { defaults.set(transcriptionProviderID, forKey: Keys.transcribe); refreshKeyFlag() } }
+    @Published var notesProviderID: String { didSet { defaults.set(notesProviderID, forKey: Keys.notes); refreshKeyFlag() } }
     @Published var customProviders: [Provider] { didSet { saveCustom() } }
-    @Published var offlineLanguage: String { didSet { UserDefaults.standard.set(offlineLanguage, forKey: Keys.offlineLanguage) } }
-    @Published var offlineVocabulary: String { didSet { UserDefaults.standard.set(offlineVocabulary, forKey: Keys.offlineVocabulary) } }
+    @Published var offlineLanguage: String { didSet { defaults.set(offlineLanguage, forKey: Keys.offlineLanguage) } }
+    @Published var offlineVocabulary: String { didSet { defaults.set(offlineVocabulary, forKey: Keys.offlineVocabulary) } }
     @Published var hasKeys = false
 
-    lazy var offlineRuntime = OfflineRuntimeManager()
+    /// Test seam: the `UserDefaults` domain every persisted setting reads from
+    /// and writes to. Production default is `.standard`; tests inject a
+    /// unique, empty suite (removed afterwards) so construction and settings
+    /// round-trips never touch the user's real defaults. See `init`.
+    private let defaults: UserDefaults
+    /// Test seam: how a provider's API key is looked up — `key(for:)` and
+    /// `hasKey(_:)` call this instead of `Keychain.get` directly, so tests can
+    /// supply fake keys without touching the real Keychain. Production default
+    /// is the real Keychain lookup.
+    private let keyLookup: (String) -> String?
+    /// Test seam: builds the cloud pipeline `processCloud` drives. Production
+    /// default is the real `Pipelines.make`, which talks to actual cloud
+    /// providers; tests substitute a fake `MeetingPipeline` (e.g. one that
+    /// blocks until released, or fails at the notes stage) instead.
+    var pipelineFactory: (_ transcription: Provider, _ transcriptionKey: String?,
+                          _ notes: Provider, _ notesKey: String?,
+                          _ notesTemplate: String?, _ notesLanguage: String?) throws -> MeetingPipeline
+        = Pipelines.make
+    /// Test seam: builds the `NotesWriter` used by `generateMinutesStage`
+    /// (standalone Generate/Regenerate, and the notes half of the offline
+    /// path). Production default is the real `Pipelines.makeNotesWriter`;
+    /// tests substitute a fake `NotesWriter`; the writer then runs through
+    /// `MeetingProcessor.generateNotes(sessionDir:writer:providerName:progress:)`.
+    var notesWriterFactory: (_ notes: Provider, _ notesKey: String?,
+                             _ notesTemplate: String?, _ notesLanguage: String?) throws -> any NotesWriter
+        = Pipelines.makeNotesWriter
+
+    let offlineRuntime: OfflineRuntimeManager
     lazy var offlineCoordinator = OfflineJobCoordinator(runtime: offlineRuntime, workerResourceName: "offline_worker")
-    lazy var qwenASRRuntime = Qwen3ASRRuntimeManager()
+    let qwenASRRuntime: Qwen3ASRRuntimeManager
     lazy var qwenASRCoordinator = OfflineJobCoordinator(runtime: qwenASRRuntime, workerResourceName: "offline_worker_qwen")
-    lazy var localNotesRuntime = LocalNotesRuntimeManager()
+    let localNotesRuntime: LocalNotesRuntimeManager
     private var managerCancellables = Set<AnyCancellable>()
 
     /// The offline runtime/coordinator pair for the currently selected
@@ -169,10 +196,39 @@ final class AppState: ObservableObject {
         }
     }
 
-    init() {
-        let d = UserDefaults.standard, fm = FileManager.default
+    /// - Parameters:
+    ///   - userDefaults: Domain for every persisted setting. Production
+    ///     default `.standard`; tests pass a unique, empty suite so
+    ///     construction and settings round-trips can't touch (or be affected
+    ///     by) the user's real defaults.
+    ///   - initialOutputDir: Used in place of `~/Documents/meetgist` only when
+    ///     `userDefaults` has no previously persisted output dir — i.e. it
+    ///     replaces today's hardcoded fallback, it never overrides an
+    ///     explicit user setting. Tests pass a temp dir so `init` never
+    ///     creates or scans the real `~/Documents/meetgist`.
+    ///   - keyLookup: How `key(for:)`/`hasKey(_:)` resolve a provider's API
+    ///     key. Production default is the real Keychain; tests supply fake
+    ///     keys.
+    ///   - offlineRuntime, qwenASRRuntime, localNotesRuntime: Runtime managers
+    ///     for the app-managed local engines. Production default constructs
+    ///     each with its real Application Support root; tests can pass
+    ///     instances pointed at a temp root (each manager's `init(root:)`)
+    ///     instead. Either way, construction only reads state (`refresh()`);
+    ///     it never installs or removes anything.
+    init(userDefaults: UserDefaults = .standard,
+         initialOutputDir: URL? = nil,
+         keyLookup: @escaping (String) -> String? = Keychain.get,
+         offlineRuntime: OfflineRuntimeManager? = nil,
+         qwenASRRuntime: Qwen3ASRRuntimeManager? = nil,
+         localNotesRuntime: LocalNotesRuntimeManager? = nil) {
+        self.defaults = userDefaults
+        self.keyLookup = keyLookup
+        self.offlineRuntime = offlineRuntime ?? OfflineRuntimeManager()
+        self.qwenASRRuntime = qwenASRRuntime ?? Qwen3ASRRuntimeManager()
+        self.localNotesRuntime = localNotesRuntime ?? LocalNotesRuntimeManager()
+        let d = userDefaults, fm = FileManager.default
         if let s = d.string(forKey: Keys.output) { outputDir = URL(fileURLWithPath: (s as NSString).expandingTildeInPath) }
-        else { outputDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents/meetgist") }
+        else { outputDir = initialOutputDir ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents/meetgist") }
         presence = Presence(rawValue: d.string(forKey: Keys.presence) ?? "menuBar") ?? .menuBar
         autoTranscribe = (d.object(forKey: Keys.auto) as? Bool) ?? true
         detectMeetings = (d.object(forKey: Keys.detectMeetings) as? Bool) ?? true
@@ -190,15 +246,15 @@ final class AppState: ObservableObject {
         else { customProviders = [] }
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
         refreshKeyFlag()
-        offlineRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        self.offlineRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
         offlineCoordinator.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
-        qwenASRRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        self.qwenASRRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
         qwenASRCoordinator.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
-        localNotesRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        self.localNotesRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
         // refresh() and each coordinator's scan() do synchronous disk I/O per
         // session folder that scales with meeting count; both hop off the
@@ -216,7 +272,7 @@ final class AppState: ObservableObject {
     var transcriptionProvider: Provider { provider(transcriptionProviderID) ?? ProviderCatalog.builtIn[0] }
     var notesProvider: Provider { provider(notesProviderID) ?? ProviderCatalog.builtIn[0] }
     func effective(_ p: Provider) -> Provider {
-        var e = p; let d = UserDefaults.standard
+        var e = p; let d = defaults
         if let m = d.string(forKey: Keys.modelOverride(providerID: p.id, slot: .transcribe)), !m.isEmpty { e.transcribeModel = m }
         if let m = d.string(forKey: Keys.modelOverride(providerID: p.id, slot: .notes)), !m.isEmpty { e.notesModel = m }
         if p.notesStyle == .codexCLI,
@@ -225,9 +281,9 @@ final class AppState: ObservableObject {
         }
         return e
     }
-    func key(for p: Provider) -> String? { Keychain.get(p.keyAccount) }
+    func key(for p: Provider) -> String? { keyLookup(p.keyAccount) }
     func hasKey(_ p: Provider) -> Bool {
-        !p.needsAPIKey || Keychain.get(p.keyAccount) != nil
+        !p.needsAPIKey || keyLookup(p.keyAccount) != nil
     }
     func saveKey(_ k: String, for p: Provider) {
         do {
@@ -239,19 +295,19 @@ final class AppState: ObservableObject {
         refreshKeyFlag()
     }
     func setModel(_ m: String, for p: Provider, slot: ProviderModelSlot) {
-        UserDefaults.standard.set(m.trimmingCharacters(in: .whitespacesAndNewlines),
-                                  forKey: Keys.modelOverride(providerID: p.id, slot: slot))
+        defaults.set(m.trimmingCharacters(in: .whitespacesAndNewlines),
+                     forKey: Keys.modelOverride(providerID: p.id, slot: slot))
         objectWillChange.send()
     }
     func modelOverride(_ p: Provider, slot: ProviderModelSlot) -> String {
-        UserDefaults.standard.string(forKey: Keys.modelOverride(providerID: p.id, slot: slot)) ?? ""
+        defaults.string(forKey: Keys.modelOverride(providerID: p.id, slot: slot)) ?? ""
     }
     func setCodexReasoningEffort(_ effort: String, for p: Provider) {
-        UserDefaults.standard.set(effort, forKey: Keys.codexEffort(providerID: p.id))
+        defaults.set(effort, forKey: Keys.codexEffort(providerID: p.id))
         objectWillChange.send()
     }
     func codexReasoningEffort(for p: Provider) -> String {
-        UserDefaults.standard.string(forKey: Keys.codexEffort(providerID: p.id)) ?? (p.notesReasoningEffort ?? "none")
+        defaults.string(forKey: Keys.codexEffort(providerID: p.id)) ?? (p.notesReasoningEffort ?? "none")
     }
     // A UUID keeps every id unique regardless of how many custom providers
     // exist or have been removed; existing ids are untouched. See P3.
@@ -309,7 +365,7 @@ final class AppState: ObservableObject {
         if !canStartTranscription { return tr(L.addKeyTranscriptionProvider) }
         return notesReadiness(for: notesProvider).setupMessage
     }
-    private func saveCustom() { if let data = try? JSONEncoder().encode(customProviders) { UserDefaults.standard.set(data, forKey: Keys.custom) }; refreshKeyFlag() }
+    private func saveCustom() { if let data = try? JSONEncoder().encode(customProviders) { defaults.set(data, forKey: Keys.custom) }; refreshKeyFlag() }
 
     // MARK: Meetings
     /// Scanning the output directory does synchronous disk I/O per session
@@ -452,9 +508,9 @@ final class AppState: ObservableObject {
             do {
                 let tp = self.effective(self.transcriptionProvider), np = self.effective(self.notesProvider)
                 let template = (self.useTemplate && !self.notesTemplate.isEmpty) ? self.notesTemplate : nil
-                let pipeline = try Pipelines.make(transcription: tp, transcriptionKey: self.key(for: tp),
-                                                  notes: np, notesKey: self.key(for: np),
-                                                  notesTemplate: template, notesLanguage: self.notesLanguage)
+                let pipeline = try self.pipelineFactory(tp, self.key(for: tp),
+                                                        np, self.key(for: np),
+                                                        template, self.notesLanguage)
                 let generateNotes = self.autoGenerateNotes
                 _ = try await MeetingProcessor.process(sessionDir: dir, pipeline: pipeline, generateNotes: generateNotes) { msg in
                     Task { @MainActor in
@@ -649,10 +705,8 @@ final class AppState: ObservableObject {
     private func generateMinutesStage(_ dir: URL, generation: Int) async throws {
         let provider = effective(notesProvider)
         let template = (useTemplate && !notesTemplate.isEmpty) ? notesTemplate : nil
-        _ = try await MeetingProcessor.generateNotes(
-            sessionDir: dir, notesProvider: provider, notesKey: key(for: provider),
-            notesTemplate: template, notesLanguage: notesLanguage
-        ) { [weak self] message in
+        let writer = try notesWriterFactory(provider, key(for: provider), template, notesLanguage)
+        _ = try await MeetingProcessor.generateNotes(sessionDir: dir, writer: writer, providerName: provider.name) { [weak self] message in
             Task { @MainActor in
                 guard let self, self.processGeneration == generation else { return }
                 self.status = message
@@ -821,7 +875,7 @@ final class AppState: ObservableObject {
     static func norm(_ db: Float) -> Double { Double(max(0, min(1, (db + 60) / 60))) }
 
     private func persistOutput() {
-        UserDefaults.standard.set(outputDir.path, forKey: Keys.output)
+        defaults.set(outputDir.path, forKey: Keys.output)
         try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
     }
 }

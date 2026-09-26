@@ -117,6 +117,28 @@ normal progress text. Other 4xx errors fail immediately. Long model calls
 provider may still be processing — and billing — that request. Backoff sleeps
 stop promptly on cancellation.
 
+`GeminiTranscriber` and `WhisperTranscriber` split long audio into
+`kMeetGistChunkSeconds` chunks and, once `HTTPRetry`'s retries are exhausted on
+one chunk, used to lose every already-transcribed chunk on the next attempt.
+`CloudTranscriptionCheckpoint` now persists each successfully transcribed
+chunk's final (already offset-adjusted) text atomically under
+`<sessionDir>/cloud-transcription/<configID>/<track>-<index>.txt` —
+`<track>` is the aligned window index for Gemini (one call already spans every
+track) and the speaker-track name for Whisper (each track is transcribed
+independently) — and `CloudChunkTranscription.run` reuses any chunk already on
+disk for the same `configID` before calling the API again, reporting "Reusing
+N of M transcribed chunks…". `configID` (`cloudTranscriptionConfigID`) folds in
+provider style, model, base URL, chunk length, and which tracks exist, so
+switching provider/model/base URL never reuses another config's chunks — the
+same role `offlineConfigID` plays for the offline engines. Writes use the same
+atomic write-`.tmp`-then-`rename` pattern as `OfflineJobStore`, so a cancelled
+or crashed chunk is never mistaken for a committed one.
+`MeetingProcessor.process` deletes the whole checkpoint tree right after
+`transcript.md` is durably written: it's regenerable cache, not part of the
+transcript contract, so a plain Regenerate of an already-finished meeting
+simply recomputes every chunk rather than risk reusing chunks from
+stale/replaced audio.
+
 ### Offline transcription (MLX Whisper, Qwen3-ASR)
 
 Each offline engine has its own runtime manager (`OfflineRuntimeManager`,
@@ -211,10 +233,20 @@ policy.
 
 ## Testing
 
-`make test` runs the Swift Testing suite (`tests/MeetGistKitTests`, MeetGistKit
-only — `app/Sources` has no test target) and the Python unit tests for the
-workers and `scripts/sync_tracks.py`. It adds the extra framework flags Swift
-Testing needs under the Command Line Tools. Caveat: a *clean* build of the
+`make test` runs the Swift Testing suite — `tests/MeetGistKitTests` for
+MeetGistKit and `tests/MeetGistAppTests` for the `MeetGistApp` executable
+target (`@testable import MeetGistApp`; SPM can test an executable target the
+same way) — and the Python unit tests for the workers and
+`scripts/sync_tracks.py`. `AppState`'s processing lifecycle (generation-token
+guarded completions, settings persistence, key/notes readiness) is covered in
+`tests/MeetGistAppTests` via the constructor injection points documented on
+`AppState.init` (UserDefaults instance, initial output dir, key lookup
+closure, local-runtime manager instances, `pipelineFactory`/
+`notesWriterFactory`), which keep tests from touching the real UserDefaults
+domain, `~/Documents/meetgist`, Keychain, or Application Support. Real
+recording (`SessionRecorder`/ScreenCaptureKit) and OS permissions are not
+covered by any test and need manual verification. It adds the extra framework
+flags Swift Testing needs under the Command Line Tools. Caveat: a *clean* build of the
 `MeetGistApp` target needs full Xcode, because the `KeyboardShortcuts`
 dependency (every 2.x release) contains `#Preview` blocks whose
 `PreviewsMacros` plugin ships only with Xcode. There is no CI; run `make test`

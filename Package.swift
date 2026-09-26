@@ -37,6 +37,11 @@ let package = Package(
             path: "app/Sources"
         ),
         .testTarget(
+            name: "MeetGistAppTests",
+            dependencies: ["MeetGistApp"],
+            path: "tests/MeetGistAppTests"
+        ),
+        .testTarget(
             name: "MeetGistKitTests",
             dependencies: ["MeetGistKit"],
             path: "tests/MeetGistKitTests"

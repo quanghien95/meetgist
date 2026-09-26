@@ -16,10 +16,11 @@ public extension MeetingProcessor {
                                        providerName: notesProvider.name, progress: progress)
     }
 
-    /// Small test seam around the already-existing NotesWriter protocol. Offline
-    /// transcription remains independent; this stage reads only transcript.md.
+    /// Runs an already-built NotesWriter (also the seam the app's tests use
+    /// to inject a fake writer). Offline transcription remains independent;
+    /// this stage reads only transcript.md.
     @discardableResult
-    internal static func generateNotes(sessionDir: URL, writer: any NotesWriter,
+    public static func generateNotes(sessionDir: URL, writer: any NotesWriter,
                                        providerName: String,
                                        progress: @escaping @Sendable (String) -> Void) async throws
         -> (polished: String, summary: String) {
