@@ -122,17 +122,35 @@ struct GeminiTranscriber: Transcriber {
         defer { try? FileManager.default.removeItem(at: work) }
 
         // Chunk each track into aligned windows (single window if short enough).
-        var perTrack: [[AudioTools.Chunk]] = []
+        // `let`, not `var`: the per-window closure below runs as a `@Sendable`
+        // closure argument to `CloudChunkTranscription.run`, and a captured
+        // `var` there is a Swift 6 strict-concurrency error, not just a style
+        // preference.
+        var builtPerTrack: [[AudioTools.Chunk]] = []
         for t in tracks {
-            perTrack.append(try await AudioTools.chunk(
+            builtPerTrack.append(try await AudioTools.chunk(
                 t.url, chunkSeconds: kMeetGistChunkSeconds,
                 workDir: work.appendingPathComponent(t.label)))
         }
+        let perTrack = builtPerTrack
         let windows = perTrack.map(\.count).max() ?? 1
         let chunked = (maxDur ?? 0) > kMeetGistChunkSeconds && windows > 1
 
-        var parts: [String] = []
-        for i in 0..<windows {
+        // Each "window" already spans every track (mic + system uploaded and
+        // sent together in one generateContent call), so the checkpoint unit
+        // here is one window, not one track. Persisted text is the final,
+        // already-offset-adjusted segment — the same string this function
+        // used to just append to `parts` — so a resumed run needs no extra
+        // bookkeeping to re-derive the offset.
+        let checkpoint = CloudTranscriptionCheckpoint(
+            sessionDir: sessionDir,
+            configID: cloudTranscriptionConfigID(
+                style: "gemini", model: model, baseURL: baseURL, chunkSeconds: kMeetGistChunkSeconds,
+                options: [micExists ? "mic" : nil, systemExists ? "sys" : nil].compactMap { $0 }))
+
+        let parts = try await CloudChunkTranscription.run(
+            checkpoint: checkpoint, track: "window", count: windows, progress: progress
+        ) { i in
             if windows > 1 { progress("Transcribing part \(i + 1)/\(windows)…") } else { progress("Transcribing…") }
             let offset = Double(i) * kMeetGistChunkSeconds
             var fileParts: [[String: Any]] = []
@@ -145,7 +163,7 @@ struct GeminiTranscriber: Transcriber {
             let raw = try await http.generate(model: model, parts: [["text": prompt]] + fileParts, progress: progress)
             var seg = section(after: "---TRANSCRIPT---", in: raw)
             if chunked { seg = TranscriptText.offsetTimestamps(seg, by: offset) }
-            parts.append(seg)
+            return seg
         }
         return parts.joined(separator: "\n")
     }

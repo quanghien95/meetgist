@@ -108,24 +108,44 @@ struct WhisperTranscriber: Transcriber {
             .appendingPathComponent("meetgist-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: work) }
 
+        // Unlike Gemini, each track is transcribed independently (its own
+        // /audio/transcriptions call per chunk), so the checkpoint unit here
+        // is one (speaker-track, chunk index) pair. Persisted text is the
+        // final, already-offset-adjusted `[MM:SS] Speaker: …` line(s) for
+        // that chunk (newline-joined, or empty if the chunk had no speech) —
+        // the same text this function used to append straight into `lines`.
+        let checkpoint = CloudTranscriptionCheckpoint(
+            sessionDir: sessionDir,
+            configID: cloudTranscriptionConfigID(
+                style: "whisper", model: model, baseURL: baseURL, chunkSeconds: kMeetGistChunkSeconds,
+                options: [micExists ? "mic" : nil, systemExists ? "sys" : nil].compactMap { $0 }))
+
         var lines: [String] = []
         for t in tracks {
             progress("Transcribing \(t.speaker)…")
             let chunks = try await AudioTools.chunk(
                 t.url, chunkSeconds: kMeetGistChunkSeconds,
                 workDir: work.appendingPathComponent(t.speaker))
-            for c in chunks {
+            let perChunk = try await CloudChunkTranscription.run(
+                checkpoint: checkpoint, track: t.speaker, count: chunks.count, progress: progress
+            ) { i in
+                let c = chunks[i]
                 let v = try await http.transcribeFile(c.url, model: model, progress: progress)
+                var chunkLines: [String] = []
                 if let segs = v.segments, !segs.isEmpty {
                     for s in segs {
                         let text = (s.text ?? "").trimmingCharacters(in: .whitespaces)
                         guard !text.isEmpty else { continue }
                         let start = (s.start ?? 0) + c.offsetSeconds
-                        lines.append("[\(TranscriptText.stamp(start))] \(t.speaker): \(text)")
+                        chunkLines.append("[\(TranscriptText.stamp(start))] \(t.speaker): \(text)")
                     }
                 } else if let whole = v.text?.trimmingCharacters(in: .whitespacesAndNewlines), !whole.isEmpty {
-                    lines.append("[\(TranscriptText.stamp(c.offsetSeconds))] \(t.speaker): \(whole)")
+                    chunkLines.append("[\(TranscriptText.stamp(c.offsetSeconds))] \(t.speaker): \(whole)")
                 }
+                return chunkLines.joined(separator: "\n")
+            }
+            for text in perChunk where !text.isEmpty {
+                lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init))
             }
         }
         return TranscriptText.sortByTimestamp(lines).joined(separator: "\n")

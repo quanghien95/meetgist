@@ -148,6 +148,19 @@ public enum MeetingProcessor {
             sessionDir: sessionDir, micExists: micExists, systemExists: systemExists, progress: progress)
         try write(transcript, "transcript.md")
 
+        // The transcript is now durable, so any persisted cloud-transcription
+        // chunk checkpoint (see CloudTranscriptionCheckpoint) that fed it is
+        // no longer needed — it's regenerable cache, not part of the
+        // transcript contract, and could be sizeable for a long meeting.
+        // Deleting it here (rather than keeping it around for a future
+        // Regenerate) means a same-config re-run recomputes every chunk
+        // instead of reusing stale ones; that's the safer default since nothing
+        // stops a user from replacing/re-syncing audio in a session directory
+        // between runs even though the ordinary app flow never does. This
+        // never runs for the offline transcription path, which doesn't call
+        // through `MeetingProcessor.process`.
+        CloudTranscriptionCheckpoint.clearAll(sessionDir: sessionDir)
+
         guard generateNotes else {
             writeMeta(model: transcriberLabel)
             return PipelineResult(transcript: transcript, polished: "", summary: "", model: transcriberLabel)
