@@ -32,8 +32,12 @@ fact. State uncertainty explicitly.
 | Provider assembly and output contracts | `Pipeline.swift`, `Provider.swift`, `Prompts.swift`, `NotesTemplates.swift` |
 | Cloud providers | `GeminiClient.swift`, `OpenAIClient.swift`, `CodexCLINotes.swift` |
 | Offline MLX Whisper transcription | `OfflineJobCoordinator.swift`, `OfflineJobStore.swift`, `OfflineRuntimeManager.swift`, `Resources/offline_worker.py` |
+| Offline Qwen3-ASR transcription | `Qwen3ASRRuntimeManager.swift`, `Resources/offline_worker_qwen.py` (same coordinator/store as Whisper) |
 | Local Qwen notes | `LocalNotesRuntimeManager.swift`, `QwenMLXNotes.swift`, `Resources/qwen_notes_worker.py` |
 | Apple on-device notes | `AppleFoundationModelsNotes.swift` |
+| Subprocess supervision (cancel/timeout/kill, pipe draining) | `ChildProcess.swift` |
+| Post-process script | `app/Sources/Automation/PostProcessRunner.swift` |
+| Tests | `tests/MeetGistKitTests` (Swift Testing), `tests/test_*.py` (unittest) |
 
 ## Architecture invariants
 
@@ -41,15 +45,23 @@ fact. State uncertainty explicitly.
   Do not change recording, sync, or audio behavior unless the task requires it.
 - `transcript.md` is the canonical input to the notes stage. Preserve the
   existing `polished.md` and `summary.md` output contract and UI.
-- Transcription and notes each have their own provider selection. Local Whisper
-  is transcription-only; Local Qwen is notes-only.
+- Transcription and notes each have their own provider selection. The offline
+  engines (Whisper, Qwen3-ASR) are transcription-only; Local Qwen is notes-only.
+- The cloud pipeline writes `transcript.md` before calling the notes provider;
+  a notes failure must never discard a finished transcript.
 - A local provider must never silently fall back to a cloud provider.
 - Preserve existing cloud-provider behavior. Prefer the smallest coherent
   extension over redesigning provider abstractions.
 - Local runtimes are app-managed and isolated from meeting data:
-  `OfflineWhisper/v1` and `LocalNotes/Qwen3-4B/v1` under Application Support.
-- Recording has priority over local ML work. Stop or cancel local workers safely
-  before starting capture.
+  `OfflineWhisper/v1`, `Qwen3ASR/v1` and `LocalNotes/Qwen3-4B/v1` under
+  Application Support. Every runtime pins CPython (SHA-256), installs from a
+  hash-locked requirements file (`--require-hashes`) and downloads its model at
+  an exact revision; keep new engines to the same standard.
+- Recording has priority over any processing. Stop local workers and cancel any
+  in-flight cloud/notes/post-process task before starting capture; completion
+  handlers must check the process generation token before touching state.
+- Spawn cancellable subprocesses through `ChildProcess`, never
+  `waitUntilExit()` on undrained pipes.
 
 ## Critical flows
 
@@ -57,8 +69,8 @@ fact. State uncertainty explicitly.
   directory.
 - **FLOW-2 — Cloud pipeline:** selected cloud transcription/notes providers run
   through the existing composed pipeline.
-- **FLOW-3 — Offline transcription:** MLX Whisper writes resumable per-meeting
-  state and transcript parts, then produces `transcript.md`.
+- **FLOW-3 — Offline transcription:** MLX Whisper or Qwen3-ASR writes resumable
+  per-meeting state and transcript parts, then produces `transcript.md`.
 - **FLOW-4 — Notes:** an existing transcript is sent only to the selected notes
   provider, which writes the established notes outputs.
 - **FLOW-5 — Local Qwen setup/run:** the app installs the pinned runtime/model,
@@ -72,8 +84,10 @@ Follow existing patterns and make the smallest change that fully solves the
 request. Do not introduce a daemon, RAG/vector store, generic LLM framework,
 or new persistence layer without an approved architecture decision.
 
-After changing code, run focused tests or syntax checks appropriate to the
-change, inspect the diff, and report unverified items. For API, schema, or
+After changing code, run `make test` (Swift Testing + Python unittest; works
+with only the Command Line Tools) plus `swift build`, inspect the diff, and
+report unverified items. `app/Sources` has no test target, so AppState changes
+need manual verification. For API, schema, or
 persisted-data changes, check producers, consumers, backward compatibility,
 retry/cancellation, and rollback behavior.
 
@@ -93,8 +107,14 @@ retry/cancellation, and rollback behavior.
   proposal for a new architecture.
 - Qwen has one app-level `last-run-metrics.json`; Whisper persists progress and
   part timing per meeting instead of a single global last-run metric.
-- A local Swift toolchain/SDK mismatch can block `swift test`; never report it
-  as passing unless it actually ran.
+- With only the Command Line Tools, plain `swift test` cannot find the Swift
+  Testing frameworks — use `make test`, which passes the needed flags. XCTest is
+  not available there at all, so write new tests with Swift Testing. Never
+  report tests as passing unless they actually ran.
+- A clean build of the `MeetGistApp` target needs full Xcode: `KeyboardShortcuts`
+  (all 2.x releases) uses `#Preview`, whose macro plugin ships only with Xcode.
+- `docs/review-2026-09-26.md` is a point-in-time review; check its findings
+  against the current code before acting on them.
 
 ## Definition of done
 
