@@ -33,6 +33,7 @@ fact. State uncertainty explicitly.
 | Cloud providers | `GeminiClient.swift`, `OpenAIClient.swift`, `CodexCLINotes.swift` |
 | Offline MLX Whisper transcription | `OfflineJobCoordinator.swift`, `OfflineJobStore.swift`, `OfflineRuntimeManager.swift`, `Resources/offline_worker.py` |
 | Offline Qwen3-ASR transcription | `Qwen3ASRRuntimeManager.swift`, `Resources/offline_worker_qwen.py` (same coordinator/store as Whisper) |
+| Runtime setup shared by all local runtimes | `ManagedPython.swift`; offline engines share `ManagedOfflineRuntime` (`OfflineRuntimeManager.swift`) |
 | Local Qwen notes | `LocalNotesRuntimeManager.swift`, `QwenMLXNotes.swift`, `Resources/qwen_notes_worker.py` |
 | Apple on-device notes | `AppleFoundationModelsNotes.swift` |
 | Subprocess supervision (cancel/timeout/kill, pipe draining) | `ChildProcess.swift` |

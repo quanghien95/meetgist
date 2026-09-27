@@ -19,15 +19,14 @@ public enum OfflineCoordinatorError: LocalizedError {
 
 /// What `OfflineJobCoordinator` needs from an app-managed local runtime.
 /// `OfflineRuntimeManager` (Whisper) and `Qwen3ASRRuntimeManager` (Qwen3-ASR)
-/// both already expose exactly this shape.
+/// both provide it through their shared `ManagedOfflineRuntime` base.
 @MainActor
 public protocol OfflineTranscriptionRuntime: AnyObject {
     var state: OfflineRuntimeState { get }
     var pythonURL: URL { get }
     var modelURL: URL { get }
 }
-extension OfflineRuntimeManager: OfflineTranscriptionRuntime {}
-extension Qwen3ASRRuntimeManager: OfflineTranscriptionRuntime {}
+extension ManagedOfflineRuntime: OfflineTranscriptionRuntime {}
 
 @MainActor
 public final class OfflineJobCoordinator: ObservableObject {

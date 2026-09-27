@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import Foundation
 import Combine
-import CryptoKit
 
 public enum OfflineRuntimeState: Equatable, Sendable {
     case notInstalled
@@ -10,18 +9,48 @@ public enum OfflineRuntimeState: Equatable, Sendable {
     case failed(String)
 }
 
+/// Everything that differs between the offline transcription engines' runtimes.
+/// Keeping it declarative means a new engine cannot forget the model revision
+/// pin, the hash-locked requirements, or its own isolated root.
+public struct OfflineRuntimeConfig: Sendable, Equatable {
+    /// Path under Application Support, e.g. "MeetGist/OfflineWhisper/v1".
+    public let rootPath: String
+    /// Bundled `<name>.lock` installed with `pip --require-hashes`.
+    public let lockResource: String
+    /// Engine package shown while installing and recorded in ready.json.
+    public let packageName: String
+    public let packageMarkerKey: String
+    public let packageVersion: String
+    public let mlxVersion: String
+    public let modelRepo: String
+    /// Exact Hugging Face commit sha — never a moving branch.
+    public let modelRevision: String
+    /// Total repository file bytes at the pinned revision.
+    public let modelDownloadBytes: Int64
+    /// File under `model/` whose presence means the snapshot is complete.
+    public let modelReadyFile: String
+    public let modelDisplayName: String
+    public let unsupportedMessage: String
+}
+
+/// Installs and manages one app-owned Python runtime for offline transcription.
+/// `OfflineRuntimeManager` (Whisper) and `Qwen3ASRRuntimeManager` (Qwen3-ASR)
+/// are this class with their own config and root, fully independent of each
+/// other.
 @MainActor
-public final class OfflineRuntimeManager: ObservableObject {
-    public static let pythonVersion = "3.11.16"
-    public static let pythonBuild = "20260814"
-    public static let mlxWhisperVersion = "0.4.3"
-    public static let mlxVersion = "0.32.1"
-    public static let modelRevision = "49e6aa286ad60c14352c404340ded53710378a11"
-    /// Total repository file bytes at the pinned model revision. Settings rounds
-    /// this using decimal units; the Python runtime and packages are additional.
-    public static let modelDownloadBytes: Int64 = 3_083_522_487
-    public static let pythonArchiveSHA256 = "fcba9f3f676c83e07225e38116649f0c6eb94cb4fcc166632cf92769462b6e39"
-    public static var isSupported: Bool {
+public class ManagedOfflineRuntime: ObservableObject {
+    public let config: OfflineRuntimeConfig
+
+    @Published public private(set) var state: OfflineRuntimeState = .notInstalled
+    @Published public private(set) var installProgress: Double = 0
+    @Published public private(set) var installDetail = ""
+
+    public let root: URL
+    public var pythonURL: URL { ManagedPython.pythonURL(in: root) }
+    public var modelURL: URL { root.appendingPathComponent("model", isDirectory: true) }
+    private var markerURL: URL { root.appendingPathComponent("ready.json") }
+
+    public nonisolated static var isSupported: Bool {
 #if arch(arm64)
         true
 #else
@@ -29,21 +58,13 @@ public final class OfflineRuntimeManager: ObservableObject {
 #endif
     }
 
-    @Published public private(set) var state: OfflineRuntimeState = .notInstalled
-    @Published public private(set) var installProgress: Double = 0
-    @Published public private(set) var installDetail = ""
-
-    public let root: URL
-    public var pythonURL: URL { root.appendingPathComponent("python/bin/python3") }
-    public var modelURL: URL { root.appendingPathComponent("model", isDirectory: true) }
-    private var markerURL: URL { root.appendingPathComponent("ready.json") }
-
-    public init(root: URL? = nil) {
+    init(config: OfflineRuntimeConfig, root: URL?) {
+        self.config = config
         if let root { self.root = root }
         else {
             let support = FileManager.default.urls(for: .applicationSupportDirectory,
                                                    in: .userDomainMask).first!
-            self.root = support.appendingPathComponent("MeetGist/OfflineWhisper/v1", isDirectory: true)
+            self.root = support.appendingPathComponent(config.rootPath, isDirectory: true)
         }
         refresh()
     }
@@ -55,7 +76,7 @@ public final class OfflineRuntimeManager: ObservableObject {
         }
         let fm = FileManager.default
         state = fm.isExecutableFile(atPath: pythonURL.path)
-            && fm.fileExists(atPath: modelURL.appendingPathComponent("weights.npz").path)
+            && fm.fileExists(atPath: modelURL.appendingPathComponent(config.modelReadyFile).path)
             && fm.fileExists(atPath: markerURL.path) ? .ready : .notInstalled
     }
 
@@ -66,69 +87,45 @@ public final class OfflineRuntimeManager: ObservableObject {
         installDetail = "Preparing local runtime…"
         do {
 #if !arch(arm64)
-            throw RuntimeError("Offline Whisper v1 supports Apple Silicon Macs only.")
+            throw ManagedPython.SetupError(config.unsupportedMessage)
 #else
-            let fm = FileManager.default
-            try fm.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fm.fileExists(atPath: root.path) { try fm.removeItem(at: root) }
-            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try ManagedPython.resetRoot(root)
 
-            installDetail = "Downloading CPython \(Self.pythonVersion)…"
-            let archiveURL = URL(string:
-                "https://github.com/astral-sh/python-build-standalone/releases/download/\(Self.pythonBuild)/cpython-\(Self.pythonVersion)%2B\(Self.pythonBuild)-aarch64-apple-darwin-install_only.tar.gz")!
-            let (downloaded, response) = try await URLSession.shared.download(from: archiveURL)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw RuntimeError("CPython download failed.")
-            }
-            let archive = root.appendingPathComponent("python.tar.gz")
-            try fm.moveItem(at: downloaded, to: archive)
-            let digest = SHA256.hash(data: try Data(contentsOf: archive))
-                .map { String(format: "%02x", $0) }.joined()
-            guard digest == Self.pythonArchiveSHA256 else {
-                throw RuntimeError("The CPython download failed its SHA-256 check.")
-            }
+            installDetail = "Downloading CPython \(ManagedPython.version)…"
+            try await ManagedPython.installCPython(into: root)
             installProgress = 0.16
-            try await run("/usr/bin/tar", ["-xzf", archive.path, "-C", root.path])
-            try? fm.removeItem(at: archive)
-            guard fm.isExecutableFile(atPath: pythonURL.path) else {
-                throw RuntimeError("The pinned CPython archive did not contain python/bin/python3.")
-            }
 
-            installDetail = "Installing MLX Whisper \(Self.mlxWhisperVersion)…"
+            installDetail = "Installing \(config.packageName) \(config.packageVersion)…"
             installProgress = 0.25
-            guard let requirements = Bundle.module.url(forResource: "offline-requirements", withExtension: "lock") else {
-                throw RuntimeError("Bundled offline requirements are missing.")
-            }
-            try await run(pythonURL.path, ["-m", "pip", "install", "--disable-pip-version-check",
-                                           "--no-input", "--require-hashes", "-r", requirements.path])
+            try await ManagedPython.pipInstall(in: root, lockResource: config.lockResource,
+                                               missingMessage: "Bundled offline requirements are missing.")
 
-            installDetail = "Downloading MLX Whisper Large V3…"
+            installDetail = "Downloading \(config.modelDisplayName)…"
             installProgress = 0.62
-            let script = """
-            import sys
-            from huggingface_hub import snapshot_download
-            snapshot_download(repo_id='mlx-community/whisper-large-v3-mlx', revision='\(Self.modelRevision)', local_dir=sys.argv[1])
-            """
-            try await run(pythonURL.path, ["-c", script, modelURL.path])
+            try await ManagedPython.downloadModel(in: root, repoID: config.modelRepo,
+                                                  revision: config.modelRevision, to: modelURL)
 
-            let marker: [String: String] = [
-                "python": Self.pythonVersion,
-                "python_build": Self.pythonBuild,
-                "mlx_whisper": Self.mlxWhisperVersion,
-                "mlx": Self.mlxVersion,
-                "model": "mlx-community/whisper-large-v3-mlx",
-                "model_revision": Self.modelRevision,
-            ]
-            let markerData = try JSONSerialization.data(withJSONObject: marker, options: [.prettyPrinted, .sortedKeys])
-            try markerData.write(to: markerURL, options: .atomic)
+            try ManagedPython.writeMarker(Self.marker(for: config), to: markerURL)
             installProgress = 1
-            installDetail = "MLX Whisper Large V3 is ready."
+            installDetail = "\(config.modelDisplayName) is ready."
             state = .ready
 #endif
         } catch {
             state = .failed(error.localizedDescription)
             installDetail = error.localizedDescription
         }
+    }
+
+    /// Contents of ready.json: the exact versions this runtime was built from.
+    nonisolated static func marker(for config: OfflineRuntimeConfig) -> [String: String] {
+        [
+            "python": ManagedPython.version,
+            "python_build": ManagedPython.build,
+            config.packageMarkerKey: config.packageVersion,
+            "mlx": config.mlxVersion,
+            "model": config.modelRepo,
+            "model_revision": config.modelRevision,
+        ]
     }
 
     /// Removes only the app-owned interpreter and model cache.
@@ -140,39 +137,35 @@ public final class OfflineRuntimeManager: ObservableObject {
         installDetail = ""
         state = .notInstalled
     }
-
-    private func run(_ executable: String, _ arguments: [String]) async throws {
-        let logURL = root.appendingPathComponent("install.log")
-        if !FileManager.default.fileExists(atPath: logURL.path) {
-            FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        }
-        let log = try FileHandle(forWritingTo: logURL)
-        try log.seekToEnd()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.standardOutput = log
-        process.standardError = log
-        let status: Int32 = try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { finished in
-                continuation.resume(returning: finished.terminationStatus)
-            }
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-        try log.close()
-        guard status == 0 else {
-            let tail = (try? String(contentsOf: logURL, encoding: .utf8))?.split(separator: "\n").suffix(8).joined(separator: "\n")
-            throw RuntimeError(tail ?? "Runtime setup command failed (\(status)).")
-        }
-    }
 }
 
-private struct RuntimeError: LocalizedError {
-    let message: String
-    init(_ message: String) { self.message = message }
-    var errorDescription: String? { message }
+/// The app-owned runtime for offline MLX Whisper transcription.
+@MainActor
+public final class OfflineRuntimeManager: ManagedOfflineRuntime {
+    public nonisolated static let whisperConfig = OfflineRuntimeConfig(
+        rootPath: "MeetGist/OfflineWhisper/v1",
+        lockResource: "offline-requirements",
+        packageName: "MLX Whisper",
+        packageMarkerKey: "mlx_whisper",
+        packageVersion: "0.4.3",
+        mlxVersion: "0.32.1",
+        modelRepo: "mlx-community/whisper-large-v3-mlx",
+        modelRevision: "49e6aa286ad60c14352c404340ded53710378a11",
+        modelDownloadBytes: 3_083_522_487,
+        modelReadyFile: "weights.npz",
+        modelDisplayName: "MLX Whisper Large V3",
+        unsupportedMessage: "Offline Whisper v1 supports Apple Silicon Macs only.")
+
+    public nonisolated static var pythonVersion: String { ManagedPython.version }
+    public nonisolated static var pythonBuild: String { ManagedPython.build }
+    public nonisolated static var mlxWhisperVersion: String { whisperConfig.packageVersion }
+    public nonisolated static var mlxVersion: String { whisperConfig.mlxVersion }
+    public nonisolated static var modelRevision: String { whisperConfig.modelRevision }
+    /// Settings rounds this using decimal units; the Python runtime and packages are additional.
+    public nonisolated static var modelDownloadBytes: Int64 { whisperConfig.modelDownloadBytes }
+    public nonisolated static var pythonArchiveSHA256: String { ManagedPython.archiveSHA256 }
+
+    public init(root: URL? = nil) {
+        super.init(config: Self.whisperConfig, root: root)
+    }
 }

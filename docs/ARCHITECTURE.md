@@ -189,7 +189,11 @@ MeetGist/
 Every runtime pins its CPython build (SHA-256 verified), installs Python
 packages from a bundled hash-locked requirements file with `pip install
 --require-hashes`, and downloads its model at an exact Hugging Face commit
-revision. Each writes a `ready.json` marker recording those versions.
+revision. Each writes a `ready.json` marker recording those versions. The shared steps live in
+`ManagedPython`; the two offline engines are one `ManagedOfflineRuntime`
+implementation configured by an `OfflineRuntimeConfig` (root path, lockfile,
+model repo + revision, readiness file), so a new engine declares these values
+instead of copying the installer.
 
 Qwen's metric file describes only the most recent local Qwen notes job. It
 includes total elapsed time, wall-clock time, model load, reliable MLX
