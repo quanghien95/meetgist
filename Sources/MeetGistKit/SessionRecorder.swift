@@ -41,7 +41,7 @@ public final class SessionRecorder: @unchecked Sendable {
     /// atomic-ish instead of the previous `withIntermediateDirectories: true`,
     /// which silently reused an existing folder — and `start()` then deleted
     /// its `system.m4a`/`mic.m4a` before recording into it.
-    static func makeSessionDir(outputDir: URL, base: String) throws -> URL {
+    public static func makeSessionDir(outputDir: URL, base: String) throws -> URL {
         let fm = FileManager.default
         try fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
         var suffix = 1

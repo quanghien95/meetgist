@@ -74,17 +74,38 @@ extension AppState {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = Self.importableAudioTypes
         guard panel.runModal() == .OK, let source = panel.url else { return }
+        importAudio(from: source)
+    }
 
+    /// Imports `source` as a new meeting (the file-picker-free half of
+    /// `importAudio()`). The folder name is unique even for two imports in
+    /// the same second, so an earlier import's audio is never overwritten.
+    func importAudio(from source: URL) {
+        guard recorder == nil else {
+            status = tr(L.stopRecordingBeforeImport)
+            return
+        }
+        guard state != .processing else {
+            status = tr(L.waitCurrentTaskBeforeImport)
+            return
+        }
         let dir = outputDir
-        let name = "imported-\(Self.importFolderStamp())"
-        let sessionDir = dir.appendingPathComponent(name)
         state = .processing; status = tr(L.importingMessage)
         Task { [weak self] in
             guard let self else { return }
             do {
-                try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+                let sessionDir = try SessionRecorder.makeSessionDir(
+                    outputDir: dir, base: "imported-\(Self.importFolderStamp())")
                 try await AudioTools.export(source, to: sessionDir.appendingPathComponent("mic.m4a"))
+                // The folder name ends in a unix timestamp, which would otherwise
+                // be shown as the title; the source file's name is more useful.
+                try? MeetingStore.setTitle(source.deletingPathExtension().lastPathComponent,
+                                           forSessionDir: sessionDir)
                 self.refresh(); self.selectedID = sessionDir.lastPathComponent
+                // The import itself is done; leave `.processing` before handing
+                // off, or processOffline's "already processing" guard rejects
+                // the auto-transcription and the app stays stuck in processing.
+                self.state = .idle
                 await self.finishNewSession(sessionDir, savedMessage: self.tr(L.importedMessage))
             } catch {
                 self.state = .error; self.lastError = error.localizedDescription

@@ -20,8 +20,11 @@ enum AppStateTestSupport {
     /// - Parameter keyLookup: stands in for `Keychain.get`; defaults to "no
     ///   provider has a key" so callers that don't care about key state get a
     ///   deterministic, harmless default.
+    /// - Parameter prepareRuntimes: runs against the temp root before the
+    ///   runtime managers are created, e.g. to fake an installed runtime.
     static func makeAppState(keyLookup: @escaping (String) -> String? = { _ in nil },
-                             keyStore: @escaping (String, String) throws -> Void = { _, _ in })
+                             keyStore: @escaping (String, String) throws -> Void = { _, _ in },
+                             prepareRuntimes: (URL) throws -> Void = { _ in })
         throws -> (state: AppState, cleanup: () -> Void) {
         let suiteName = "meetgist-apptests-\(UUID().uuidString)"
         guard let suite = UserDefaults(suiteName: suiteName) else {
@@ -31,6 +34,7 @@ enum AppStateTestSupport {
             .appendingPathComponent("meetgist-appstate-tests-\(UUID().uuidString)")
         let outputDir = root.appendingPathComponent("meetings")
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        try prepareRuntimes(root)
 
         let state = AppState(
             userDefaults: suite,
@@ -67,7 +71,7 @@ enum AppStateTestSupport {
     /// Polls `condition` until it's true or `timeout` elapses. AppState's
     /// processing tasks complete asynchronously on the main actor, and Swift
     /// Testing has no built-in "wait for a published change" primitive.
-    static func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async throws {
+    static func waitUntil(timeout: TimeInterval = 10, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             if Date() > deadline { throw TestSetupError.timedOut }

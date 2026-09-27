@@ -130,12 +130,17 @@ public enum MeetingStore {
     /// Changes only the displayed title. The session directory remains stable so
     /// transcription checkpoints and IDs do not need migration.
     public static func rename(_ meeting: Meeting, to rawTitle: String) throws {
+        try setTitle(rawTitle, forSessionDir: meeting.dir)
+    }
+
+    /// Writes the displayed title for a session folder (see `rename`).
+    public static func setTitle(_ rawTitle: String, forSessionDir dir: URL) throws {
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
             throw NSError(domain: "MeetGist.MeetingStore", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Meeting name cannot be empty."])
         }
-        try (title + "\n").write(to: meeting.dir.appendingPathComponent(titleFile),
+        try (title + "\n").write(to: dir.appendingPathComponent(titleFile),
                                   atomically: true, encoding: .utf8)
     }
 
