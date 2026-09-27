@@ -38,7 +38,7 @@ audio-sync behavior, cloud providers, or the notes output contract.
 | Job scheduling/cancellation | `Sources/MeetGistKit/OfflineJobCoordinator.swift` |
 | Checkpoints and persisted progress | `Sources/MeetGistKit/OfflineJobStore.swift` |
 | MLX Whisper inference | `Sources/MeetGistKit/Resources/offline_worker.py` |
-| App lifecycle and post-transcription notes step | `app/Sources/AppState.swift` |
+| App lifecycle and post-transcription notes step | `app/Sources/AppState/AppState+Processing.swift` |
 
 ## Operating invariants
 

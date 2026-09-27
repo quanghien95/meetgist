@@ -17,12 +17,12 @@ struct MenuBarPopover: View {
                            text: statusText(state.state, loc),
                            pulse: state.state == .recording)
                 Spacer()
-                if isLive { TimerLabel(seconds: state.elapsed, size: 13) }
+                if isLive { LiveTimer(meters: state.meters, size: 13) }
             }
 
             if isLive {
-                LabeledLevel(label: loc.t(L.me), level: state.micLevel, tint: Theme.mint)
-                LabeledLevel(label: loc.t(L.system), level: state.systemLevel, tint: Theme.teal)
+                LiveLevel(meters: state.meters, track: .mic, label: loc.t(L.me))
+                LiveLevel(meters: state.meters, track: .system, label: loc.t(L.system))
             } else if state.state == .processing || state.state == .error, !state.status.isEmpty {
                 // While a job runs (or just failed) the popover is where people
                 // look first — show what is happening instead of the tagline.

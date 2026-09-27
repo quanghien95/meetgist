@@ -105,7 +105,7 @@ struct LibraryView: View {
             HStack(spacing: 8) {
                 StatusPill(color: statusColor(state.state), text: statusText(state.state, loc),
                            pulse: state.state == .recording)
-                if isLive { TimerLabel(seconds: state.elapsed, size: 11) }
+                if isLive { LiveTimer(meters: state.meters, size: 11) }
                 Text(state.status).font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
                 Spacer()
                 if state.isLoadingMeetings {

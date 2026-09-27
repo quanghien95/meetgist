@@ -63,7 +63,7 @@ private struct MiniControllerView: View {
             HStack(spacing: 8) {
                 Circle().fill(state.state == .paused ? Theme.amber : Theme.red)
                     .frame(width: 7, height: 7)
-                TimerLabel(seconds: state.elapsed, size: 12)
+                LiveTimer(meters: state.meters, size: 12)
                 Spacer(minLength: 4)
                 Button { state.pauseResume() } label: {
                     Image(systemName: state.state == .paused ? "play.fill" : "pause.fill").font(.system(size: 10))
@@ -76,8 +76,8 @@ private struct MiniControllerView: View {
                 }.buttonStyle(.plain).foregroundStyle(Theme.muted)
             }
             if !collapsed {
-                miniLevel(loc.t(L.me), state.micLevel, Theme.mint)
-                miniLevel(loc.t(L.system), state.systemLevel, Theme.teal)
+                MiniLevel(meters: state.meters, track: .mic, label: loc.t(L.me))
+                MiniLevel(meters: state.meters, track: .system, label: loc.t(L.system))
             }
         }
         .padding(.horizontal, 12).padding(.vertical, collapsed ? 8 : 9)
@@ -86,12 +86,19 @@ private struct MiniControllerView: View {
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Theme.line, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
     }
+}
 
-    private func miniLevel(_ label: String, _ level: Double, _ tint: Color) -> some View {
+/// The mini panel's compact labeled level bar; observes the meters directly.
+private struct MiniLevel: View {
+    @ObservedObject var meters: RecordingMeters
+    let track: MeterTrack
+    let label: String
+    var body: some View {
         HStack(spacing: 6) {
             Text(label).font(Theme.mono(8, .semibold)).foregroundStyle(Theme.muted)
                 .lineLimit(1).frame(width: 34, alignment: .leading)
-            LevelBar(level: level, tint: tint, segments: 20)
+            LevelBar(level: track == .mic ? meters.micLevel : meters.systemLevel,
+                     tint: track == .mic ? Theme.mint : Theme.teal, segments: 20)
         }
     }
 }

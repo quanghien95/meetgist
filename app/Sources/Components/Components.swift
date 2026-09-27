@@ -135,3 +135,26 @@ private struct GhostButtonBody: View {
             .opacity(isEnabled ? 1 : 0.45)
     }
 }
+
+// MARK: Live recording readouts
+// Each observes `RecordingMeters` directly, so the 10 Hz ticker re-renders only
+// these small views instead of everything observing `AppState`.
+
+struct LiveTimer: View {
+    @ObservedObject var meters: RecordingMeters
+    var size: CGFloat = 13
+    var body: some View { TimerLabel(seconds: meters.elapsed, size: size) }
+}
+
+enum MeterTrack { case mic, system }
+
+struct LiveLevel: View {
+    @ObservedObject var meters: RecordingMeters
+    let track: MeterTrack
+    let label: String
+    var body: some View {
+        LabeledLevel(label: label,
+                     level: track == .mic ? meters.micLevel : meters.systemLevel,
+                     tint: track == .mic ? Theme.mint : Theme.teal)
+    }
+}

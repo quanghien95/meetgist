@@ -25,7 +25,7 @@ fact. State uncertainty explicitly.
 
 | Area | Primary code |
 | --- | --- |
-| App lifecycle and user flows | `app/Sources/AppState.swift` |
+| App lifecycle and user flows | `app/Sources/AppState/` (`AppState.swift` + `AppState+Recording`, `+Processing`, `+Providers`, `+Library`, `+Runtimes`) |
 | Settings and meeting UI | `app/Sources/SettingsView.swift`, `app/Sources/Library`, `app/Sources/MeetingDetailView.swift` |
 | Recording and audio capture | `Sources/MeetGistKit/Recorder.swift`, `SessionRecorder.swift`, `AudioTools.swift` |
 | Meeting files and list actions | `Sources/MeetGistKit/MeetingStore.swift` |
