@@ -40,7 +40,11 @@ public final class OfflineJobCoordinator: ObservableObject {
     private var process: Process?
     private var activeStore: OfflineJobStore?
     private var activeLogHandle: FileHandle?
-    private var monitorTask: Task<Void, Never>?
+    /// Watches `transcription/` for the worker's atomic `state.json` replaces,
+    /// so progress is reloaded when it changes instead of on a timer.
+    private var stateWatcher: DispatchSourceFileSystemObject?
+    /// Callers waiting in `waitUntilFinished(sessionID:)`.
+    private var finishWaiters: [UUID: (sessionID: String, continuation: CheckedContinuation<Void, Never>)] = [:]
     private var requestedStopStatus: OfflineJobStatus?
 
     public init(runtime: OfflineTranscriptionRuntime, workerResourceName: String = "offline_worker") {
@@ -182,16 +186,50 @@ public final class OfflineJobCoordinator: ObservableObject {
         activeSessionID = state.sessionID
         activeLogHandle = logHandle
         requestedStopStatus = nil
-        monitorTask?.cancel()
-        monitorTask = Task { [weak self] in
-            guard let self else { return }
-            while workerProcess.isRunning && !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(400))
-                self.reload(store: store)
-            }
-            guard !Task.isCancelled else { return }
-            self.finish(process: workerProcess, store: store)
+        watchState(store: store)
+        // Event-driven completion: the process tells us when it exits (a fast
+        // worker may already have exited, in which case the handler fires
+        // right away).
+        workerProcess.terminationHandler = { [weak self] finished in
+            Task { @MainActor in self?.finish(process: finished, store: store) }
         }
+        if !workerProcess.isRunning { finish(process: workerProcess, store: store) }
+    }
+
+    /// Suspends until no job for `sessionID` is running (returns at once if
+    /// none is). Resumes early if the calling task is cancelled.
+    public func waitUntilFinished(sessionID: String) async {
+        guard activeSessionID == sessionID else { return }
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if activeSessionID != sessionID || Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    finishWaiters[id] = (sessionID, continuation)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.resumeWaiter(id) }
+        }
+    }
+
+    private func resumeWaiter(_ id: UUID) {
+        finishWaiters.removeValue(forKey: id)?.continuation.resume()
+    }
+
+    private func watchState(store: OfflineJobStore) {
+        stateWatcher?.cancel()
+        let fd = open(store.transcriptionDir.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename],
+                                                               queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.reload(store: store) }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        stateWatcher = source
     }
 
     public func pause() async { await stop(marking: .paused) }
@@ -228,7 +266,8 @@ public final class OfflineJobCoordinator: ObservableObject {
 
     private func finish(process finished: Process, store: OfflineJobStore) {
         guard process === finished else { return }
-        monitorTask?.cancel()
+        stateWatcher?.cancel()
+        stateWatcher = nil
         try? activeLogHandle?.close()
         activeLogHandle = nil
         let state = (try? store.load()) ?? jobs[activeSessionID ?? ""]
@@ -248,8 +287,13 @@ public final class OfflineJobCoordinator: ObservableObject {
         }
         self.process = nil
         activeStore = nil
+        let finishedSessionID = activeSessionID
         activeSessionID = nil
         requestedStopStatus = nil
+        for (id, waiter) in finishWaiters where waiter.sessionID == finishedSessionID {
+            finishWaiters.removeValue(forKey: id)
+            waiter.continuation.resume()
+        }
     }
 
     /// Last few lines of the worker's log (bounded), included in `lastError`

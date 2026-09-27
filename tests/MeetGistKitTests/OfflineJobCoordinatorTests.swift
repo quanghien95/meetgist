@@ -175,4 +175,95 @@ import Foundation
         #expect(FileManager.default.fileExists(atPath: logURL.path))
         #expect(try String(contentsOf: logURL).contains("boom: something went wrong"))
     }
+
+    /// Fake runtime whose "python3" runs the given shell body. The worker is
+    /// invoked as `python3 <worker.py> --session-dir <dir> --model-dir <dir>`,
+    /// so the session dir is `$3`.
+    @MainActor private static func makeRuntime(root: URL, script: String) throws -> OfflineRuntimeManager {
+        let runtimeRoot = root.appendingPathComponent("runtime")
+        let python = runtimeRoot.appendingPathComponent("python/bin/python3")
+        let fm = FileManager.default
+        try fm.createDirectory(at: python.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(at: runtimeRoot.appendingPathComponent("model"), withIntermediateDirectories: true)
+        try ("#!/bin/sh\n" + script).write(to: python, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: python.path)
+        try Data().write(to: runtimeRoot.appendingPathComponent("model/weights.npz"))
+        try Data("{}".utf8).write(to: runtimeRoot.appendingPathComponent("ready.json"))
+        return OfflineRuntimeManager(root: runtimeRoot)
+    }
+
+    /// Progress and completion are event-driven: an atomic state.json replace
+    /// by the worker shows up without a polling timer, and
+    /// `waitUntilFinished` returns as soon as the worker exits.
+    @Test @MainActor func progressFollowsStateFileAndWaitReturnsOnExit() async throws {
+        let root = TestSupport.makeTempDirectoryURL("meetgist-offline-events")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = """
+        STATE="$3/transcription/state.json"
+        sleep 0.3
+        /usr/bin/python3 - "$STATE" <<'PY'
+        import json, os, sys
+        p = sys.argv[1]
+        s = json.load(open(p))
+        s["progress"]["total_seconds"] = 100.0
+        s["progress"]["processed_seconds"] = 50.0
+        open(p + ".tmp", "w").write(json.dumps(s))
+        os.replace(p + ".tmp", p)
+        PY
+        sleep 0.6
+        /usr/bin/python3 - "$STATE" <<'PY'
+        import json, os, sys
+        p = sys.argv[1]
+        s = json.load(open(p))
+        s["status"] = "completed"
+        s["progress"]["processed_seconds"] = 100.0
+        open(p + ".tmp", "w").write(json.dumps(s))
+        os.replace(p + ".tmp", p)
+        PY
+        exit 0
+        """
+        let runtime = try Self.makeRuntime(root: root, script: script)
+        let session = root.appendingPathComponent("meeting")
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        let coordinator = OfflineJobCoordinator(runtime: runtime)
+        let id = session.lastPathComponent
+        try await coordinator.start(sessionDir: session, config: OfflineJobConfig())
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while (coordinator.state(for: id)?.progress.fraction ?? 0) < 0.5, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(coordinator.state(for: id)?.progress.fraction == 0.5)
+        #expect(coordinator.activeSessionID == id)
+
+        let started = clock.now
+        await coordinator.waitUntilFinished(sessionID: id)
+        #expect(started.duration(to: clock.now) < .seconds(4))
+        #expect(coordinator.activeSessionID == nil)
+        #expect(coordinator.state(for: id)?.status == .completed)
+        await coordinator.waitUntilFinished(sessionID: id)   // no job: returns at once
+    }
+
+    /// A cancelled waiter is released even though the worker keeps running.
+    @Test @MainActor func waitUntilFinishedHonorsTaskCancellation() async throws {
+        let root = TestSupport.makeTempDirectoryURL("meetgist-offline-wait-cancel")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let runtime = try Self.makeRuntime(root: root, script: "trap 'exit 75' TERM INT\nwhile true; do sleep 1; done\n")
+        let session = root.appendingPathComponent("meeting")
+        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        let coordinator = OfflineJobCoordinator(runtime: runtime)
+        try await coordinator.start(sessionDir: session, config: OfflineJobConfig())
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let waiter = Task { @MainActor in await coordinator.waitUntilFinished(sessionID: session.lastPathComponent) }
+        try await Task.sleep(for: .milliseconds(100))
+        waiter.cancel()
+        await waiter.value
+        #expect(started.duration(to: clock.now) < .seconds(3))
+        #expect(coordinator.activeSessionID != nil)
+        await coordinator.cancel()
+        #expect(coordinator.activeSessionID == nil)
+    }
 }

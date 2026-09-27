@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Longfu Xu
 import Foundation
+import Combine
 import MeetGistKit
 
 // MARK: - Processing (cloud + offline transcription, notes generation, post-process)
@@ -117,15 +118,20 @@ extension AppState {
             guard let self else { return }
             do {
                 try await coordinator.start(sessionDir: dir, config: self.offlineConfig)
-                while coordinator.activeSessionID != nil {
-                    try Task.checkCancellation()
-                    guard self.processGeneration == generation else { return }
-                    if let job = coordinator.state(for: dir.lastPathComponent) {
-                        let percent = Int(job.progress.fraction * 100)
+                // Progress follows the coordinator's published job state (it
+                // reloads when the worker writes state.json); completion is a
+                // signal from the coordinator, not a polling loop.
+                let sessionID = dir.lastPathComponent
+                let progress = coordinator.$jobs
+                    .compactMap { $0[sessionID]?.progress.fraction }
+                    .map { Int($0 * 100) }
+                    .removeDuplicates()
+                    .sink { [weak self] percent in
+                        guard let self, self.processGeneration == generation, self.state == .processing else { return }
                         self.status = self.tr(L.localTranscriptionPercent(percent))
                     }
-                    try await Task.sleep(for: .milliseconds(500))
-                }
+                await coordinator.waitUntilFinished(sessionID: sessionID)
+                progress.cancel()
                 try Task.checkCancellation()
                 guard self.processGeneration == generation else { return }
                 let job = coordinator.state(for: dir.lastPathComponent)
@@ -193,8 +199,14 @@ extension AppState {
                 await active.cancel()
                 guard let self, self.processGeneration == generation else { return }
                 self.state = .idle; self.status = self.tr(L.canceledMessage)
+                self.refresh()
             }
-        } else { state = .idle; status = tr(L.canceledMessage) }
+        } else {
+            state = .idle; status = tr(L.canceledMessage)
+            // A canceled job may already have written transcript.md (e.g.
+            // canceled during the notes stage); show it in the list.
+            refresh()
+        }
     }
 
     func generateMinutes(_ dir: URL) {

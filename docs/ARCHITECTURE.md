@@ -149,6 +149,12 @@ parts; part IDs are namespaced by engine+model so switching engines never
 reuses incompatible output. Completion writes the regular transcript contract,
 after which the normal notes stage can run.
 
+Progress and completion are event-driven: the coordinator reloads job state
+when the worker atomically replaces `transcription/state.json` (a file-system
+watch on that directory) and learns about exit from the process's termination
+handler; `AppState` follows the published job state and awaits
+`waitUntilFinished(sessionID:)` instead of polling.
+
 Listing jobs (`scan`) is read-only (`OfflineJobStore.recoveredView()`) and
 skips any session that is active on either coordinator; the repairing
 `recover()` (delete stale `*.tmp`, reset `transcribing` → `pending`) runs only
