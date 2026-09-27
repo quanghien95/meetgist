@@ -14,13 +14,6 @@ struct OpenAIHTTP: Sendable {
         return req
     }
 
-    private func ensureOK(_ resp: URLResponse, _ data: Data) throws {
-        guard let http = resp as? HTTPURLResponse else { return }
-        guard (200..<300).contains(http.statusCode) else {
-            throw PipelineError.http(http.statusCode, String((String(data: data, encoding: .utf8) ?? "").prefix(400)))
-        }
-    }
-
     // MARK: STT (/audio/transcriptions)
 
     struct Verbose: Decodable {
@@ -29,7 +22,7 @@ struct OpenAIHTTP: Sendable {
         struct Seg: Decodable { let start: Double?; let text: String? }
     }
 
-    func transcribeFile(_ url: URL, model: String) async throws -> Verbose {
+    func transcribeFile(_ url: URL, model: String, progress: (@Sendable (String) -> Void)? = nil) async throws -> Verbose {
         let boundary = "meetgist.\(UUID().uuidString)"
         var req = authed("/audio/transcriptions")
         req.httpMethod = "POST"
@@ -38,8 +31,12 @@ struct OpenAIHTTP: Sendable {
             boundary: boundary,
             fields: ["model": model, "response_format": "verbose_json"],
             fileField: "file", fileURL: url, mime: AudioTools.mimeType(for: url))
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try ensureOK(resp, data)
+        let requestToSend = req
+        let data = try await HTTPRetry.withRetry(label: model, policy: .modelCall, progress: progress) { () -> Data in
+            let (d, resp) = try await URLSession.shared.data(for: requestToSend)
+            try HTTPRetry.ensureOK(resp, d)
+            return d
+        }
         // Some providers return plain text for verbose_json on small clips; fall back.
         if let v = try? JSONDecoder().decode(Verbose.self, from: data) { return v }
         return Verbose(text: String(data: data, encoding: .utf8), segments: nil)
@@ -52,7 +49,7 @@ struct OpenAIHTTP: Sendable {
         let choices: [Choice]?
     }
 
-    func chat(model: String, system: String, user: String) async throws -> String {
+    func chat(model: String, system: String, user: String, progress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         var req = authed("/chat/completions")
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -64,9 +61,12 @@ struct OpenAIHTTP: Sendable {
                 ["role": "user", "content": user],
             ],
         ])
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try ensureOK(resp, data)
-        let decoded = try JSONDecoder().decode(ChatResp.self, from: data)
+        let requestToSend = req
+        let decoded = try await HTTPRetry.withRetry(label: model, policy: .modelCall, progress: progress) { () -> ChatResp in
+            let (d, resp) = try await URLSession.shared.data(for: requestToSend)
+            try HTTPRetry.ensureOK(resp, d)
+            return try JSONDecoder().decode(ChatResp.self, from: d)
+        }
         let text = decoded.choices?.first?.message?.content ?? ""
         if text.isEmpty { throw PipelineError.badResponse("empty chat output") }
         return text
@@ -108,24 +108,44 @@ struct WhisperTranscriber: Transcriber {
             .appendingPathComponent("meetgist-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: work) }
 
+        // Unlike Gemini, each track is transcribed independently (its own
+        // /audio/transcriptions call per chunk), so the checkpoint unit here
+        // is one (speaker-track, chunk index) pair. Persisted text is the
+        // final, already-offset-adjusted `[MM:SS] Speaker: …` line(s) for
+        // that chunk (newline-joined, or empty if the chunk had no speech) —
+        // the same text this function used to append straight into `lines`.
+        let checkpoint = CloudTranscriptionCheckpoint(
+            sessionDir: sessionDir,
+            configID: cloudTranscriptionConfigID(
+                style: "whisper", model: model, baseURL: baseURL, chunkSeconds: kMeetGistChunkSeconds,
+                options: [micExists ? "mic" : nil, systemExists ? "sys" : nil].compactMap { $0 }))
+
         var lines: [String] = []
         for t in tracks {
             progress("Transcribing \(t.speaker)…")
             let chunks = try await AudioTools.chunk(
                 t.url, chunkSeconds: kMeetGistChunkSeconds,
                 workDir: work.appendingPathComponent(t.speaker))
-            for c in chunks {
-                let v = try await http.transcribeFile(c.url, model: model)
+            let perChunk = try await CloudChunkTranscription.run(
+                checkpoint: checkpoint, track: t.speaker, count: chunks.count, progress: progress
+            ) { i in
+                let c = chunks[i]
+                let v = try await http.transcribeFile(c.url, model: model, progress: progress)
+                var chunkLines: [String] = []
                 if let segs = v.segments, !segs.isEmpty {
                     for s in segs {
                         let text = (s.text ?? "").trimmingCharacters(in: .whitespaces)
                         guard !text.isEmpty else { continue }
                         let start = (s.start ?? 0) + c.offsetSeconds
-                        lines.append("[\(TranscriptText.stamp(start))] \(t.speaker): \(text)")
+                        chunkLines.append("[\(TranscriptText.stamp(start))] \(t.speaker): \(text)")
                     }
                 } else if let whole = v.text?.trimmingCharacters(in: .whitespacesAndNewlines), !whole.isEmpty {
-                    lines.append("[\(TranscriptText.stamp(c.offsetSeconds))] \(t.speaker): \(whole)")
+                    chunkLines.append("[\(TranscriptText.stamp(c.offsetSeconds))] \(t.speaker): \(whole)")
                 }
+                return chunkLines.joined(separator: "\n")
+            }
+            for text in perChunk where !text.isEmpty {
+                lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init))
             }
         }
         return TranscriptText.sortByTimestamp(lines).joined(separator: "\n")
@@ -138,6 +158,7 @@ struct ChatNotesWriter: NotesWriter {
     let baseURL: String
     let model: String
     var template: String? = nil
+    var language: String = Prompts.defaultNotesLanguage
     var label: String { model }
 
     func notes(transcript: String,
@@ -145,11 +166,11 @@ struct ChatNotesWriter: NotesWriter {
         progress("Writing minutes & summary…")
         let http = OpenAIHTTP(apiKey: apiKey, base: baseURL)
         if let t = template, !t.isEmpty {
-            let out = try await http.chat(model: model, system: Prompts.templatedNotes(t), user: transcript)
+            let out = try await http.chat(model: model, system: Prompts.templatedNotes(t, language: language), user: transcript, progress: progress)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return (out, out)
         }
-        let raw = try await http.chat(model: model, system: Prompts.polished, user: transcript)
+        let raw = try await http.chat(model: model, system: Prompts.polished(language: language), user: transcript, progress: progress)
         return splitPolished(raw)
     }
 }

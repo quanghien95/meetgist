@@ -40,25 +40,37 @@ pre-recorded audio files too.
 ## Native app (developer preview)
 
 A native SwiftUI app is included — a menu-bar recorder + a window with your
-meetings, transcript / minutes / summary, and a Settings panel for your API key.
-It reuses the same recording engine and prompts, with the whole pipeline in Swift
-(no Python or ffmpeg).
+meetings, transcript / minutes / summary, and a Settings panel for providers and
+keys. It reuses the same recording engine and prompts, with the whole pipeline in
+Swift (no ffmpeg; Python only inside the optional app-managed local runtimes).
 
-Run it from Xcode:
+Run it from the terminal:
 
 ```bash
-open Package.swift          # opens the package in Xcode
-# pick the “MeetGistApp” scheme (top bar), then press Run (⌘R)
+./build.sh && ./run.sh      # release build of the MeetGistApp SPM target, then launch
+./kill.sh                   # stop a running dev build
 ```
 
-or from the terminal: `swift run MeetGistApp`.
+or build the real, stably-signed `.app` (keeps permissions + icon across rebuilds;
+needs full Xcode and `xcodegen`): `make install-app`.
 
 First run: macOS will ask for **Screen Recording** + **Microphone**. Open
-**Settings** (gear) and paste a free-tier **Gemini API key**
-(`aistudio.google.com/apikey`) to generate notes — without a key it still records
-the audio. Code lives in `Sources/MeetGistApp/` (UI) and `Sources/MeetGistKit/`
-(engine: recorder, prompts, Gemini pipeline). *Distribution as a signed/notarized
-`.dmg` is not set up yet.*
+**Settings** (gear) and pick a provider for each slot:
+
+| Slot | Providers |
+|---|---|
+| Transcription | Google Gemini, OpenAI Whisper, Groq Whisper, Offline MLX Whisper, Offline Qwen3-ASR |
+| Minutes / summary | Google Gemini, OpenAI, Groq, DeepSeek, Moonshot, xAI, custom OpenAI-compatible, Apple On-Device, Local Qwen3 4B (MLX), Codex CLI |
+
+Cloud providers are bring-your-own-key (stored in the macOS Keychain). The offline
+engines and Local Qwen download a pinned, app-managed runtime + model into
+`~/Library/Application Support/MeetGist/` on demand and then run fully on device.
+Without any provider configured the app still records audio.
+
+Code lives in `app/Sources/` (SwiftUI app) and `Sources/MeetGistKit/` (engine:
+recorder, providers, offline jobs, prompts). See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit together.
+*Distribution as a signed/notarized `.dmg` is not set up yet.*
 
 ---
 

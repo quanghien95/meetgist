@@ -12,6 +12,10 @@ enum Theme {
     static let text    = Color(hex: 0xE6E8EB)
     static let muted   = Color(hex: 0x8A9099)
     static let mint    = Color(hex: 0x5CF2B0)   // primary accent
+    /// Tint for native controls (segmented pickers, checkboxes, bordered
+    /// buttons). They draw white labels on the tint, which is unreadable on
+    /// the bright mint, so native controls get a deeper shade of it.
+    static let controlTint = Color(hex: 0x1E9C6C)
     static let teal    = Color(hex: 0x38E0D0)
     static let amber   = Color(hex: 0xF2B85C)   // warning
     static let red     = Color(hex: 0xFF5C5C)   // error / recording
@@ -60,4 +64,45 @@ struct PanelBackground: ViewModifier {
 
 extension View {
     func panel(_ fill: Color = Theme.panel) -> some View { modifier(PanelBackground(fill: fill)) }
+}
+
+// MARK: Settings cards
+
+private struct CardDepthKey: EnvironmentKey { static let defaultValue = 0 }
+extension EnvironmentValues {
+    /// How many `CardGroupBoxStyle` boxes enclose this view (0 = top level).
+    var cardDepth: Int {
+        get { self[CardDepthKey.self] }
+        set { self[CardDepthKey.self] = newValue }
+    }
+}
+
+/// Full-width flat card for grouped settings: a muted mono section label above
+/// a panel with a 1px hairline. Nested boxes step up one surface (panel2) so
+/// hierarchy reads without extra chrome.
+struct CardGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        CardGroupBox(configuration: configuration)
+    }
+
+    private struct CardGroupBox: View {
+        let configuration: GroupBoxStyleConfiguration
+        @Environment(\.cardDepth) private var depth
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: depth == 0 ? 8 : 6) {
+                configuration.label
+                    .font(depth == 0 ? Theme.mono(10, .semibold) : Theme.ui(12, .medium))
+                    .foregroundStyle(depth == 0 ? Theme.muted : Theme.text)
+                    .textCase(depth == 0 ? .uppercase : nil)
+                    .padding(.leading, depth == 0 ? 2 : 0)
+                configuration.content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(depth == 0 ? 10 : 8)
+                    .panel(depth == 0 ? Theme.panel : Theme.panel2)
+                    .environment(\.cardDepth, depth + 1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 }

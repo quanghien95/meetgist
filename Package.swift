@@ -14,7 +14,15 @@ let package = Package(
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.2.0"),
     ],
     targets: [
-        .target(name: "MeetGistKit"),
+        .target(
+            name: "MeetGistKit",
+            resources: [.copy("Resources/offline_worker.py"),
+                        .copy("Resources/offline-requirements.lock"),
+                        .copy("Resources/offline_worker_qwen.py"),
+                        .copy("Resources/offline-requirements-qwen.lock"),
+                        .copy("Resources/qwen_notes_worker.py"),
+                        .copy("Resources/qwen-notes-requirements.lock")]
+        ),
         .executableTarget(name: "meetgist", dependencies: ["MeetGistKit"]),
         // SwiftUI app sources live in app/Sources and are the source of truth for
         // BOTH this SPM target (headless compile-check: `swift build`) and the real
@@ -27,6 +35,11 @@ let package = Package(
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
             ],
             path: "app/Sources"
+        ),
+        .testTarget(
+            name: "MeetGistAppTests",
+            dependencies: ["MeetGistApp"],
+            path: "tests/MeetGistAppTests"
         ),
         .testTarget(
             name: "MeetGistKitTests",

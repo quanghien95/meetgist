@@ -7,30 +7,75 @@ struct LibraryView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
     @State private var query = ""
+    @State private var meetingToRename: Meeting?
+    @State private var renameText = ""
+    @State private var meetingToDelete: Meeting?
+    @State private var showRename = false
+    @State private var showDelete = false
 
     private var filtered: [Meeting] {
         guard !query.isEmpty else { return state.meetings }
         return state.meetings.filter { $0.title.localizedCaseInsensitiveContains(query) }
     }
     private var isLive: Bool { state.state == .recording || state.state == .paused }
+    /// A bare "42" in the status bar read as unlabeled noise — spell out what
+    /// it counts. English distinguishes "1 meeting" from "N meetings"; zh has
+    /// no singular/plural distinction so the localized noun covers both.
+    private var meetingsCountLabel: String {
+        let count = state.meetings.count
+        if loc.effective == .zh { return "\(count) \(loc.t(L.meetingsCount))" }
+        return count == 1 ? loc.t(L.oneMeeting) : "\(count) \(loc.t(L.meetingsCount))"
+    }
+
+    /// Only the meeting actively being processed is locked; finished meetings
+    /// stay renameable/deletable even while another one is transcribing or a
+    /// different meeting is being recorded.
+    private func isProcessing(_ meeting: Meeting) -> Bool {
+        guard state.state == .processing else { return false }
+        if let active = state.activeOfflineCoordinator.activeSessionID { return meeting.id == active }
+        return meeting.id == state.selectedID
+    }
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted).font(.system(size: 11))
-                    TextField(loc.t(L.search), text: $query)
-                        .textFieldStyle(.plain).font(Theme.mono(12))
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(Theme.muted).font(.system(size: 11))
+                        TextField(loc.t(L.search), text: $query)
+                            .textFieldStyle(.plain).font(Theme.mono(12))
+                    }
+                    .padding(8).background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
+
+                    Button { state.importAudio() } label: {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 28, height: 28)
+                    .background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
+                    .help(loc.t(L.importAudio))
                 }
-                .padding(8).background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
                 .padding(10)
 
                 List(selection: $state.selectedID) {
                     Section(loc.t(L.meetings)) {
-                        ForEach(filtered) { m in MeetingRow(meeting: m).tag(m.id) }
+                        ForEach(filtered) { meeting in
+                            MeetingRow(
+                                meeting: meeting,
+                                canManage: !isProcessing(meeting),
+                                onRename: {
+                                    meetingToRename = meeting
+                                    renameText = meeting.title
+                                    showRename = true
+                                },
+                                onDelete: { requestDelete(meeting) }
+                            )
+                            .tag(meeting.id)
+                        }
                     }
                 }
                 .scrollContentBackground(.hidden)
+                .onDeleteCommand { requestDeleteSelectedMeeting() }
             }
             .background(Theme.bg)
             .navigationSplitViewColumnWidth(min: 240, ideal: 280)
@@ -60,9 +105,17 @@ struct LibraryView: View {
             HStack(spacing: 8) {
                 StatusPill(color: statusColor(state.state), text: statusText(state.state, loc),
                            pulse: state.state == .recording)
-                if isLive { TimerLabel(seconds: state.elapsed, size: 11) }
+                if isLive { LiveTimer(meters: state.meters, size: 11) }
                 Text(state.status).font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
                 Spacer()
+                if state.isLoadingMeetings {
+                    ProgressView().controlSize(.small)
+                    Text("\(loc.t(L.loadingMeetings)) (\(state.meetings.count))")
+                        .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
+                } else {
+                    Text(meetingsCountLabel)
+                        .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
+                }
                 if !state.hasKeys {
                     Button(loc.t(L.settings)) { state.showSettings = true }.buttonStyle(.link).font(.callout)
                 }
@@ -74,30 +127,89 @@ struct LibraryView: View {
         .sheet(isPresented: $state.showSettings) {
             SettingsView().environmentObject(state).environmentObject(loc).preferredColorScheme(.dark)
         }
+        .alert(loc.t(L.renameMeeting), isPresented: $showRename) {
+            TextField(loc.t(L.meetingName), text: $renameText)
+            Button(loc.t(L.rename)) {
+                if let meetingToRename { state.renameMeeting(meetingToRename, to: renameText) }
+            }
+            .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button(loc.t(L.cancel), role: .cancel) { }
+        }
+        .confirmationDialog(
+            loc.t(L.deleteMeeting), isPresented: $showDelete, titleVisibility: .visible
+        ) {
+            Button(loc.t(L.moveToTrash), role: .destructive) {
+                if let meetingToDelete { state.moveMeetingToTrash(meetingToDelete) }
+            }
+            Button(loc.t(L.cancel), role: .cancel) { }
+        } message: {
+            Text(loc.t(L.deleteMeetingWarning))
+        }
         .onAppear { state.refresh() }
+    }
+
+    private func requestDelete(_ meeting: Meeting) {
+        meetingToDelete = meeting
+        showDelete = true
+    }
+
+    private func requestDeleteSelectedMeeting() {
+        guard !isLive,
+              let selectedID = state.selectedID,
+              let meeting = state.meetings.first(where: { $0.id == selectedID }),
+              !isProcessing(meeting)
+        else { return }
+        requestDelete(meeting)
     }
 }
 
 struct MeetingRow: View {
     @EnvironmentObject var loc: Localization
     let meeting: Meeting
+    let canManage: Bool
+    let onRename: () -> Void
+    let onDelete: () -> Void
+    private var status: (color: Color, label: String) {
+        if meeting.hasNotes { return (Theme.mint, loc.t(L.summary)) }
+        if meeting.hasTranscript { return (Theme.teal, loc.t(L.transcript)) }
+        return (Theme.muted, loc.t(L.saved))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(meeting.title).font(Theme.ui(13)).foregroundStyle(Theme.text).lineLimit(1)
-            HStack(spacing: 8) {
-                if let d = meeting.date {
-                    Text(d, format: .dateTime.month().day().hour().minute())
-                        .font(Theme.mono(10)).foregroundStyle(Theme.muted)
-                }
-                Spacer()
-                if meeting.hasNotes {
-                    StatusPill(color: Theme.mint, text: loc.t(L.summary))
-                } else {
-                    StatusPill(color: Theme.muted, text: loc.t(L.saved))
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(meeting.title).font(Theme.ui(13)).foregroundStyle(Theme.text)
+                    .lineLimit(1).truncationMode(.tail)
+                // The sidebar is narrow: a full "● Transcript" pill here pushed the
+                // date into "24 Sep a…". A status dot (label in the tooltip and in
+                // the detail view) keeps the date and duration fully readable.
+                HStack(spacing: 6) {
+                    Circle().fill(status.color).frame(width: 6, height: 6)
+                        .help(status.label)
+                    if let d = meeting.date {
+                        Text(d, format: .dateTime.day().month(.abbreviated).hour().minute())
+                            .font(Theme.mono(10)).foregroundStyle(Theme.muted).lineLimit(1)
+                    }
+                    if let duration = meeting.formattedDuration {
+                        Text("· \(duration)").font(Theme.mono(10)).foregroundStyle(Theme.muted)
+                            .lineLimit(1).fixedSize()
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Menu {
+                Button(loc.t(L.rename), action: onRename)
+                Button(loc.t(L.moveToTrash), role: .destructive, action: onDelete)
+            } label: {
+                Image(systemName: "ellipsis").foregroundStyle(Theme.muted).frame(width: 18, height: 18)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .tint(Theme.muted)
+            .fixedSize()
+            .disabled(!canManage)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 }
 

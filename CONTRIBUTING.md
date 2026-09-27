@@ -48,10 +48,19 @@ make setup                 # (re)create the Python venv from scripts/requirement
 ## Before you open a PR
 
 ```bash
-swift build -c release                                   # must compile cleanly
+swift build -c release                                   # must compile cleanly (CLI + app target)
+make test                                                # Swift Testing suite + Python unit tests
 bash -n meetgist-toggle.sh scripts/transcribe_meeting.sh  # shell scripts parse
 python3 -m py_compile scripts/*.py                       # python compiles
 ```
+
+`make test` works with either full Xcode or just the Command Line Tools (it adds
+the extra Swift Testing framework flags the CLT toolchain needs). A clean build
+of the app target does need full Xcode: the `KeyboardShortcuts` dependency uses
+`#Preview`, whose macro plugin ships only with Xcode. Swift tests live
+in `tests/MeetGistKitTests/` and use Swift Testing (`import Testing`), not XCTest.
+There is no CI: run these checks locally before pushing. `MEETGIST_NETWORK_TESTS=1 make test`
+also runs the opt-in tests that hit the network (real pinned CPython download).
 
 A good manual smoke test: record a short session (hotkey or `meetgist`), confirm
 `transcript.md` / `polished.md` / `summary.md` land in your output folder, and try

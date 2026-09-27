@@ -18,18 +18,57 @@ public final class SessionRecorder: @unchecked Sendable {
     public init(outputDir: URL, title: String? = nil) throws {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd-HHmm"
+        df.locale = Locale(identifier: "en_US_POSIX")   // matches MeetingStore's parser
         let stamp = df.string(from: Date())
         let detected = title ?? detectMeetingTitle()
-        let name = detected.map { "\(stamp)-\($0)" } ?? stamp
-        sessionDir = outputDir.appendingPathComponent(name)
-        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let base = detected.map { "\(stamp)-\($0)" } ?? stamp
+        sessionDir = try Self.makeSessionDir(outputDir: outputDir, base: base)
+        if sessionDir.lastPathComponent != base {
+            // A disambiguated folder ("…-2") would otherwise display its
+            // numeric suffix as the title; pin the title the base name implies.
+            try? (MeetingStore.prettyTitle(base) + "\n").write(
+                to: sessionDir.appendingPathComponent(MeetingStore.titleFile), atomically: true, encoding: .utf8)
+        }
         systemURL = sessionDir.appendingPathComponent("system.m4a")
         micURL = sessionDir.appendingPathComponent("mic.m4a")
     }
 
+    /// Creates and returns a not-previously-existing folder named `base` under
+    /// `outputDir`, disambiguating a collision (same minute + same/no detected
+    /// title) by appending `-2`, `-3`, … `createDirectory(withIntermediateDirectories:
+    /// false)` against the parent fails with "file exists" if the name is
+    /// already taken, so looping on that error makes the check-and-create
+    /// atomic-ish instead of the previous `withIntermediateDirectories: true`,
+    /// which silently reused an existing folder — and `start()` then deleted
+    /// its `system.m4a`/`mic.m4a` before recording into it.
+    public static func makeSessionDir(outputDir: URL, base: String) throws -> URL {
+        let fm = FileManager.default
+        try fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        var suffix = 1
+        while true {
+            let candidate = suffix == 1 ? base : "\(base)-\(suffix)"
+            let url = outputDir.appendingPathComponent(candidate)
+            do {
+                try fm.createDirectory(at: url, withIntermediateDirectories: false)
+                return url
+            } catch {
+                guard fm.fileExists(atPath: url.path) else { throw error }
+                suffix += 1
+            }
+        }
+    }
+
     public func start() async throws {
         try await system.start(outputURL: systemURL)
-        try mic.start(outputURL: micURL)
+        do {
+            try mic.start(outputURL: micURL)
+        } catch {
+            // Don't leave the ScreenCaptureKit stream (and its AVAssetWriter
+            // against system.m4a in this now-abandoned session folder) running
+            // if the mic half of the pair fails to start.
+            try? await system.stop()
+            throw error
+        }
     }
 
     /// True once system audio is flowing (Screen Recording granted).
@@ -80,6 +119,7 @@ public enum MeetingProcessor {
     @discardableResult
     public static func process(sessionDir: URL,
                                pipeline: MeetingPipeline,
+                               generateNotes: Bool = true,
                                progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult {
         let mic = sessionDir.appendingPathComponent("mic.m4a")
         let system = sessionDir.appendingPathComponent("system.m4a")
@@ -88,21 +128,54 @@ public enum MeetingProcessor {
         guard micExists || systemExists else {
             throw PipelineError.badResponse("no non-empty audio in session")
         }
-        let result = try await pipeline.process(
-            sessionDir: sessionDir, micExists: micExists, systemExists: systemExists,
-            progress: progress)
 
         func write(_ s: String, _ name: String) throws {
             try (s + "\n").write(to: sessionDir.appendingPathComponent(name),
                                  atomically: true, encoding: .utf8)
         }
-        try write(result.transcript, "transcript.md")
-        try write(result.polished, "polished.md")
-        try write(result.summary, "summary.md")
-        let meta: [String: Any] = ["provider": pipeline.providerName, "model": result.model]
-        if let d = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted]) {
-            try? d.write(to: sessionDir.appendingPathComponent("postprocess_meta.json"))
+        func writeMeta(model: String) {
+            let meta: [String: Any] = ["provider": pipeline.providerName, "model": model]
+            if let d = try? JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted]) {
+                try? d.write(to: sessionDir.appendingPathComponent("postprocess_meta.json"))
+            }
         }
-        return result
+
+        // Stage 1 — transcribe, then persist transcript.md immediately. This is
+        // the durable artifact of a (possibly paid-for) transcription call; it
+        // must survive even if the notes stage below throws, mirroring the
+        // offline path, which already writes transcript.md before notes run.
+        let (transcript, transcriberLabel) = try await pipeline.transcribe(
+            sessionDir: sessionDir, micExists: micExists, systemExists: systemExists, progress: progress)
+        try write(transcript, "transcript.md")
+
+        // The transcript is now durable, so any persisted cloud-transcription
+        // chunk checkpoint (see CloudTranscriptionCheckpoint) that fed it is
+        // no longer needed — it's regenerable cache, not part of the
+        // transcript contract, and could be sizeable for a long meeting.
+        // Deleting it here (rather than keeping it around for a future
+        // Regenerate) means a same-config re-run recomputes every chunk
+        // instead of reusing stale ones; that's the safer default since nothing
+        // stops a user from replacing/re-syncing audio in a session directory
+        // between runs even though the ordinary app flow never does. This
+        // never runs for the offline transcription path, which doesn't call
+        // through `MeetingProcessor.process`.
+        CloudTranscriptionCheckpoint.clearAll(sessionDir: sessionDir)
+
+        guard generateNotes else {
+            writeMeta(model: transcriberLabel)
+            return PipelineResult(transcript: transcript, polished: "", summary: "", model: transcriberLabel)
+        }
+
+        // Stage 2 — same "transcript → polished/summary" contract as standalone
+        // Generate/Regenerate. A failure here still leaves transcript.md on
+        // disk and postprocess_meta.json unwritten, so the meeting shows the
+        // transcript and the user can retry from Generate.
+        let (polished, summary, notesLabel) = try await pipeline.writeNotes(
+            transcript: transcript, progress: progress)
+        try write(polished, "polished.md")
+        try write(summary, "summary.md")
+        let model = "\(transcriberLabel) → \(notesLabel)"
+        writeMeta(model: model)
+        return PipelineResult(transcript: transcript, polished: polished, summary: summary, model: model)
     }
 }

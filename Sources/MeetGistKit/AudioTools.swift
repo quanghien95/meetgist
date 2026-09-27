@@ -37,6 +37,20 @@ public enum AudioTools {
         }
     }
 
+    /// Transcode an arbitrary audio file (mp3, wav, aiff, flac, m4a, …) to m4a
+    /// at `destination`, for importing recordings made outside the app.
+    public static func export(_ source: URL, to destination: URL) async throws {
+        let asset = AVURLAsset(url: source)
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw NSError(domain: "meetgist.audio", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "export session failed"])
+        }
+        try? FileManager.default.removeItem(at: destination)
+        export.outputURL = destination
+        export.outputFileType = .m4a
+        try await export.exportAsync()
+    }
+
     public struct Chunk: Sendable {
         public let offsetSeconds: Double
         public let url: URL

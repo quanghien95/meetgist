@@ -1,6 +1,13 @@
-.PHONY: build setup install clean test-record cert app install-app
+.PHONY: build setup install clean test test-record cert app install-app
 
 BINARY := .build/release/meetgist
+
+# Swift Testing (`import Testing`) ships inside CommandLineTools but needs
+# explicit framework search paths there — Xcode wires this up automatically,
+# CommandLineTools does not. Detect which toolchain is active and only add
+# the flags when they're actually needed.
+CLT_TESTING_FRAMEWORKS := /Library/Developer/CommandLineTools/Library/Developer/Frameworks
+CLT_TESTING_LIB        := /Library/Developer/CommandLineTools/Library/Developer/usr/lib
 
 # --- Native .app (real, stably-signed, installable) ---------------------------
 APP_PROJECT  := app/MeetGist.xcodeproj
@@ -25,6 +32,20 @@ install: build
 	@echo ""
 	@echo "Point a macOS Shortcut's 'Run Shell Script' action at:"
 	@echo "  $(PWD)/meetgist-toggle.sh"
+
+test:
+	@if [ "$$(xcode-select -p)" = "/Library/Developer/CommandLineTools" ]; then \
+		echo "CommandLineTools active — passing explicit Swift Testing framework search paths"; \
+		swift test \
+			-Xswiftc -F -Xswiftc $(CLT_TESTING_FRAMEWORKS) \
+			-Xlinker -F -Xlinker $(CLT_TESTING_FRAMEWORKS) \
+			-Xlinker -rpath -Xlinker $(CLT_TESTING_FRAMEWORKS) \
+			-Xlinker -rpath -Xlinker $(CLT_TESTING_LIB) \
+			-Xswiftc -Xfrontend -Xswiftc -disable-cross-import-overlays; \
+	else \
+		swift test; \
+	fi
+	python3 -m unittest discover -s tests -p 'test_*.py'
 
 test-record: build
 	@echo "Recording for 15 seconds — talk into the mic and play some system audio."

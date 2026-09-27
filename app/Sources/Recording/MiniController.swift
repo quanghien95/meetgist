@@ -63,7 +63,7 @@ private struct MiniControllerView: View {
             HStack(spacing: 8) {
                 Circle().fill(state.state == .paused ? Theme.amber : Theme.red)
                     .frame(width: 7, height: 7)
-                TimerLabel(seconds: state.elapsed, size: 12)
+                LiveTimer(meters: state.meters, size: 12)
                 Spacer(minLength: 4)
                 Button { state.pauseResume() } label: {
                     Image(systemName: state.state == .paused ? "play.fill" : "pause.fill").font(.system(size: 10))
@@ -76,8 +76,8 @@ private struct MiniControllerView: View {
                 }.buttonStyle(.plain).foregroundStyle(Theme.muted)
             }
             if !collapsed {
-                LevelBar(level: state.micLevel, tint: Theme.mint, segments: 18)
-                LevelBar(level: state.systemLevel, tint: Theme.teal, segments: 18)
+                MiniLevel(meters: state.meters, track: .mic, label: loc.t(L.me))
+                MiniLevel(meters: state.meters, track: .system, label: loc.t(L.system))
             }
         }
         .padding(.horizontal, 12).padding(.vertical, collapsed ? 8 : 9)
@@ -85,5 +85,20 @@ private struct MiniControllerView: View {
         .background(Theme.panel.opacity(0.97))
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Theme.line, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 11))
+    }
+}
+
+/// The mini panel's compact labeled level bar; observes the meters directly.
+private struct MiniLevel: View {
+    @ObservedObject var meters: RecordingMeters
+    let track: MeterTrack
+    let label: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label).font(Theme.mono(8, .semibold)).foregroundStyle(Theme.muted)
+                .lineLimit(1).frame(width: 34, alignment: .leading)
+            LevelBar(level: track == .mic ? meters.micLevel : meters.systemLevel,
+                     tint: track == .mic ? Theme.mint : Theme.teal, segments: 20)
+        }
     }
 }

@@ -59,20 +59,58 @@ public struct ComposedPipeline: MeetingPipeline, Sendable {
     let transcriber: Transcriber
     let notesWriter: NotesWriter
 
-    public func process(sessionDir: URL, micExists: Bool, systemExists: Bool,
-                        progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult {
+    public func transcribe(sessionDir: URL, micExists: Bool, systemExists: Bool,
+                           progress: @escaping @Sendable (String) -> Void) async throws
+        -> (transcript: String, transcriberLabel: String) {
         let transcript = try await transcriber.transcribe(
             sessionDir: sessionDir, micExists: micExists, systemExists: systemExists, progress: progress)
+        return (transcript, transcriber.label)
+    }
+
+    public func writeNotes(transcript: String,
+                           progress: @escaping @Sendable (String) -> Void) async throws
+        -> (polished: String, summary: String, notesLabel: String) {
         let (polished, summary) = try await notesWriter.notes(transcript: transcript, progress: progress)
-        return PipelineResult(transcript: transcript, polished: polished, summary: summary,
-                              model: "\(transcriber.label) → \(notesWriter.label)")
+        return (polished, summary, notesWriter.label)
     }
 }
 
+/// Two independent stages so a caller can persist the transcript durably
+/// between them (see `MeetingProcessor.process`, which writes `transcript.md`
+/// right after `transcribe` succeeds and before `writeNotes` ever runs — a
+/// notes failure must never discard an already-produced transcript).
+/// `ComposedPipeline` is currently the only conformer.
 public protocol MeetingPipeline: Sendable {
     var providerName: String { get }
+    /// Stage 1: audio → transcript. The label describes only the transcription
+    /// provider that ran (e.g. "gemini-flash-latest").
+    func transcribe(sessionDir: URL, micExists: Bool, systemExists: Bool,
+                    progress: @escaping @Sendable (String) -> Void) async throws
+        -> (transcript: String, transcriberLabel: String)
+    /// Stage 2: transcript → (polished, summary). The label describes only the
+    /// notes provider that ran.
+    func writeNotes(transcript: String,
+                    progress: @escaping @Sendable (String) -> Void) async throws
+        -> (polished: String, summary: String, notesLabel: String)
+}
+
+public extension MeetingPipeline {
+    /// Convenience wrapper kept for source compatibility with callers that want
+    /// the old single-call shape; holds the transcript only in memory, so
+    /// prefer driving `transcribe`/`writeNotes` directly when the transcript
+    /// must be persisted before notes run (see `MeetingProcessor.process`).
     func process(sessionDir: URL, micExists: Bool, systemExists: Bool,
-                 progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult
+                 generateNotes: Bool = true,
+                 progress: @escaping @Sendable (String) -> Void) async throws -> PipelineResult {
+        let (transcript, transcriberLabel) = try await transcribe(
+            sessionDir: sessionDir, micExists: micExists, systemExists: systemExists, progress: progress)
+        guard generateNotes else {
+            return PipelineResult(transcript: transcript, polished: "", summary: "", model: transcriberLabel)
+        }
+        let (polished, summary, notesLabel) = try await writeNotes(transcript: transcript, progress: progress)
+        return PipelineResult(transcript: transcript, polished: polished, summary: summary,
+                              model: "\(transcriberLabel) → \(notesLabel)")
+    }
 }
 
 public enum Pipelines {
@@ -80,40 +118,60 @@ public enum Pipelines {
     /// keys. Throws a `PipelineError` describing what's missing/unsupported.
     public static func make(transcription: Provider, transcriptionKey: String?,
                             notes: Provider, notesKey: String?,
-                            notesTemplate: String? = nil) throws -> MeetingPipeline {
+                            notesTemplate: String? = nil,
+                            notesLanguage: String? = nil) throws -> MeetingPipeline {
         let transcriber: Transcriber
         switch transcription.transcribeStyle {
-        case "gemini":
+        case .gemini:
             guard let key = transcriptionKey, !key.isEmpty else { throw PipelineError.missingKey(transcription.name) }
             transcriber = GeminiTranscriber(apiKey: key, baseURL: transcription.baseURL,
                                             model: transcription.transcribeModel ?? "gemini-flash-latest")
-        case "whisper":
+        case .whisper:
             guard let key = transcriptionKey, !key.isEmpty else { throw PipelineError.missingKey(transcription.name) }
             transcriber = WhisperTranscriber(apiKey: key, baseURL: transcription.baseURL,
                                              model: transcription.transcribeModel ?? "whisper-1")
-        default:
+        case .offline, nil:
             throw PipelineError.unsupported("\(transcription.name) can't transcribe audio — pick a transcription provider.")
         }
 
+        let writer = try makeNotesWriter(notes: notes, notesKey: notesKey,
+                                         notesTemplate: notesTemplate, notesLanguage: notesLanguage)
+
+        return ComposedPipeline(providerName: "\(transcription.name) → \(notes.name)",
+                                transcriber: transcriber, notesWriter: writer)
+    }
+
+    /// Build only the transcript → minutes stage. Offline transcription uses this
+    /// later, without changing the existing composed cloud pipeline.
+    public static func makeNotesWriter(notes: Provider, notesKey: String?,
+                                       notesTemplate: String? = nil,
+                                       notesLanguage: String? = nil) throws -> any NotesWriter {
+        let language = (notesLanguage?.isEmpty == false) ? notesLanguage! : Prompts.defaultNotesLanguage
         let writer: NotesWriter
         switch notes.notesStyle {
-        case "gemini":
+        case .gemini:
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
             writer = GeminiNotesWriter(apiKey: key, baseURL: notes.baseURL,
                                        model: notes.notesModel ?? "gemini-flash-latest",
-                                       template: notesTemplate)
-        case "chat":
+                                       template: notesTemplate, language: language)
+        case .chat:
             guard let key = notesKey, !key.isEmpty else { throw PipelineError.missingKey(notes.name) }
             guard let model = notes.notesModel, !model.isEmpty else {
                 throw PipelineError.unsupported("\(notes.name) needs a model name in Settings.")
             }
-            writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model, template: notesTemplate)
-        default:
+            writer = ChatNotesWriter(apiKey: key, baseURL: notes.baseURL, model: model,
+                                     template: notesTemplate, language: language)
+        case .apple:
+            writer = AppleFoundationModelsNotesWriter(template: notesTemplate, language: language)
+        case .qwenMLX:
+            writer = QwenMLXNotesWriter(template: notesTemplate, language: language)
+        case .codexCLI:
+            writer = CodexCLINotesWriter(template: notesTemplate, language: language,
+                                         reasoningEffort: notes.notesReasoningEffort)
+        case nil:
             throw PipelineError.unsupported("\(notes.name) can't write notes.")
         }
-
-        return ComposedPipeline(providerName: "\(transcription.name) → \(notes.name)",
-                                transcriber: transcriber, notesWriter: writer)
+        return writer
     }
 }
 

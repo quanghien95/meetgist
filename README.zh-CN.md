@@ -21,18 +21,27 @@
 
 ## 原生 App（开发者预览）
 
-仓库里自带一个 SwiftUI 原生 App——一个菜单栏录音器，外加一个窗口管理你的会议、逐字稿/纪要/摘要，还有一个填 API key 的设置面板。它复用同一套录音引擎和提示词，整条流水线都用 Swift 实现（不依赖 Python 或 ffmpeg）。
+仓库里自带一个 SwiftUI 原生 App——一个菜单栏录音器，外加一个窗口管理你的会议、逐字稿/纪要/摘要，还有一个选择服务商、填写 key 的设置面板。它复用同一套录音引擎和提示词，整条流水线都用 Swift 实现（不依赖 ffmpeg；只有可选的、由 App 自己管理的本地运行时里才用到 Python）。
 
-从 Xcode 运行：
+在终端里运行：
 
 ```bash
-open Package.swift          # 在 Xcode 里打开这个 package
-# 在顶栏选择 “MeetGistApp” scheme，然后按 Run（⌘R）
+./build.sh && ./run.sh      # release 构建 MeetGistApp SPM target 并启动
+./kill.sh                   # 结束正在运行的开发版
 ```
 
-或在终端里：`swift run MeetGistApp`。
+或者构建带稳定签名的真正 `.app`（重复构建也能保留权限和图标；需要完整的 Xcode 和 `xcodegen`）：`make install-app`。
 
-首次运行时，macOS 会请求**屏幕录制**和**麦克风**权限。打开**设置**（齿轮图标），粘贴一个免费额度的 **Gemini API key**（`aistudio.google.com/apikey`）就能生成笔记——没有 key 它也照样录音。代码在 `Sources/MeetGistApp/`（界面）和 `Sources/MeetGistKit/`（引擎：录音器、提示词、Gemini 流水线）。*签名/公证后的 `.dmg` 分发暂时还没配置。*
+首次运行时，macOS 会请求**屏幕录制**和**麦克风**权限。打开**设置**（齿轮图标），分别为两个环节选择服务商：
+
+| 环节 | 服务商 |
+|---|---|
+| 转录 | Google Gemini、OpenAI Whisper、Groq Whisper、离线 MLX Whisper、离线 Qwen3-ASR |
+| 纪要/摘要 | Google Gemini、OpenAI、Groq、DeepSeek、Moonshot、xAI、自定义 OpenAI 兼容接口、Apple 端侧模型、本地 Qwen3 4B（MLX）、Codex CLI |
+
+云端服务商使用你自己的 key（存放在 macOS 钥匙串里）。离线引擎和本地 Qwen 会按需把固定版本的运行时和模型下载到 `~/Library/Application Support/MeetGist/`，之后完全在本机运行。没有配置任何服务商时，它照样录音。
+
+代码在 `app/Sources/`（SwiftUI App）和 `Sources/MeetGistKit/`（引擎：录音器、服务商、离线任务、提示词）。整体结构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。*签名/公证后的 `.dmg` 分发暂时还没配置。*
 
 ---
 

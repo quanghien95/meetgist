@@ -29,6 +29,22 @@ public struct NotesTemplate: Identifiable, Sendable, Hashable {
 }
 
 public enum NotesTemplateCatalog {
+    /// Derived from `Prompts.polishedOutputFormat` — the exact skeleton normal
+    /// (non-template) generation fills in — rather than a hand-copied string,
+    /// so this preview can never drift from what "Use custom template" OFF
+    /// actually produces. Strips the ---POLISHED---/---SUMMARY--- markers
+    /// (meaningless here: `Prompts.templatedNotes` doesn't split output by
+    /// them, so leaving them in would just be inert text in the user's
+    /// custom template) and the "in LANGUAGE" generation-time instructions
+    /// (meaningless outside the full generation prompt).
+    static func defaultPreviewBody() -> String {
+        Prompts.polishedOutputFormat
+            .replacingOccurrences(of: "---POLISHED---\n", with: "")
+            .replacingOccurrences(of: "\n---SUMMARY---", with: "")
+            .replacingOccurrences(of: " in LANGUAGE", with: "")
+            .replacingOccurrences(of: "in LANGUAGE", with: "")
+    }
+
     /// Built-in reference templates. The first mirrors the app's default minutes +
     /// summary structure (`Prompts.polished`) so users can see and tweak what they get.
     public static let builtIn: [NotesTemplate] = [
@@ -36,52 +52,9 @@ public enum NotesTemplateCatalog {
             id: "default",
             name: "Full minutes & summary",
             nameZh: "完整纪要 + 摘要",
-            desc: "The default structure MeetGist generates — full minutes plus a decisions/action-items summary.",
-            descZh: "MeetGist 默认生成的结构——完整纪要，加上含决定与行动项的摘要。",
-            body: """
-            # Meeting Minutes
-
-            ## Summary
-            - 2–3 sentence overview
-
-            ## Recording Information
-            - **Duration**:
-            - **Participants**:
-            - **Type**:
-
-            ## Discussion
-            ### [Topic]
-            - **Speaker**: cleaned-up point
-
-            ## Chapter Summary
-            - [MM:SS] **Chapter** — what happened
-
-            ## Selected Quotes
-            - "…" (Speaker) — why it matters
-
-            ## To-do Items
-            - [ ] Owner — task
-
-            ## Per-Speaker Stance
-            - **Speaker**:
-              - Argued:
-              - Committed to:
-
-            ## TL;DR
-            - 2–4 sentences
-
-            ## Key Decisions
-            -
-
-            ## Action Items
-            - [ ] Owner — task (due: …)
-
-            ## Open Questions
-            -
-
-            ## Notable Context
-            -
-            """,
+            desc: "The exact structure MeetGist generates by default (when \"Use custom template\" is off).",
+            descZh: "MeetGist 默认生成的结构（关闭「使用自定义模板」时）。",
+            body: defaultPreviewBody(),
             bodyZh: """
             # 会议纪要
 
@@ -90,7 +63,8 @@ public enum NotesTemplateCatalog {
 
             ## 录制信息
             - **时长**：
-            - **参会人**：
+            - **参会人名单**：
+            - **参会人数**：
             - **类型**：
 
             ## 讨论
@@ -102,9 +76,6 @@ public enum NotesTemplateCatalog {
 
             ## 精选语录
             - “…”（发言人）— 为何重要
-
-            ## 待办事项
-            - [ ] 负责人 — 任务
 
             ## 各发言人立场
             - **发言人**：

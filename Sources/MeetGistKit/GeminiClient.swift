@@ -17,66 +17,86 @@ struct GeminiHTTP: Sendable {
         let candidates: [Candidate]?
     }
 
-    func upload(_ url: URL) async throws -> (uri: String, mime: String) {
+    /// A request against `base` authenticated via the `x-goog-api-key` header
+    /// (not a `?key=` query parameter, which is more likely to end up in logs,
+    /// proxies, or crash reports). See P2-1.
+    func authed(_ path: String) -> URLRequest {
+        var req = URLRequest(url: URL(string: "\(base)\(path)")!)
+        req.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        return req
+    }
+
+    /// Uploads `url` via the Files API resumable protocol (start + finalize)
+    /// then polls file status until it's ACTIVE. The start+finalize pair is
+    /// retried as a single unit on a transient failure — re-sending only the
+    /// finalize POST to Google's one-time resumable-session URL after a 5xx
+    /// isn't known to be valid, so a retry restarts the whole upload session.
+    /// Each file-status poll GET is retried independently; the existing
+    /// 180s poll budget is unchanged.
+    func upload(_ url: URL, progress: (@Sendable (String) -> Void)? = nil) async throws -> (uri: String, mime: String) {
         let data = try Data(contentsOf: url)
         let mime = AudioTools.mimeType(for: url)
-        var start = URLRequest(url: URL(string: "\(base)/upload/v1beta/files?key=\(apiKey)")!)
-        start.httpMethod = "POST"
-        start.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
-        start.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")
-        start.setValue("\(data.count)", forHTTPHeaderField: "X-Goog-Upload-Header-Content-Length")
-        start.setValue(mime, forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
-        start.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        start.httpBody = try JSONSerialization.data(withJSONObject: ["file": ["display_name": url.lastPathComponent]])
-        let (_, sResp) = try await URLSession.shared.data(for: start)
-        guard let http = sResp as? HTTPURLResponse,
-              let uploadURL = http.value(forHTTPHeaderField: "X-Goog-Upload-URL")
-        else { throw PipelineError.badResponse("no upload URL from Gemini") }
 
-        var up = URLRequest(url: URL(string: uploadURL)!)
-        up.httpMethod = "POST"
-        up.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
-        up.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
-        up.httpBody = data
-        let (uData, uResp) = try await URLSession.shared.data(for: up)
-        try ensureOK(uResp, uData)
-        var info = try JSONDecoder().decode(FileWrap.self, from: uData).file
+        var info = try await HTTPRetry.withRetry(label: "Gemini", progress: progress) { () -> FileInfo in
+            var start = authed("/upload/v1beta/files")
+            start.httpMethod = "POST"
+            start.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
+            start.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")
+            start.setValue("\(data.count)", forHTTPHeaderField: "X-Goog-Upload-Header-Content-Length")
+            start.setValue(mime, forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
+            start.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            start.httpBody = try JSONSerialization.data(withJSONObject: ["file": ["display_name": url.lastPathComponent]])
+            let (sData, sResp) = try await URLSession.shared.data(for: start)
+            try HTTPRetry.ensureOK(sResp, sData)
+            guard let http = sResp as? HTTPURLResponse,
+                  let uploadURL = http.value(forHTTPHeaderField: "X-Goog-Upload-URL")
+            else { throw PipelineError.badResponse("no upload URL from Gemini") }
+
+            // The upload URL Google returns is itself pre-authenticated (a
+            // one-time resumable-session URL) — it never carried our API key
+            // either way, so there is nothing to move off it here.
+            var up = URLRequest(url: URL(string: uploadURL)!)
+            up.httpMethod = "POST"
+            up.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
+            up.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
+            up.httpBody = data
+            let (uData, uResp) = try await URLSession.shared.data(for: up)
+            try HTTPRetry.ensureOK(uResp, uData)
+            return try JSONDecoder().decode(FileWrap.self, from: uData).file
+        }
 
         var waited = 0
         while (info.state ?? "") == "PROCESSING", waited < 180 {
             try await Task.sleep(nanoseconds: 1_000_000_000); waited += 1
             guard let name = info.name else { break }
-            let (gData, gResp) = try await URLSession.shared.data(
-                from: URL(string: "\(base)/v1beta/\(name)?key=\(apiKey)")!)
-            try ensureOK(gResp, gData)
-            info = try JSONDecoder().decode(FileInfo.self, from: gData)
+            info = try await HTTPRetry.withRetry(label: "Gemini", progress: progress) { () -> FileInfo in
+                let (gData, gResp) = try await URLSession.shared.data(for: authed("/v1beta/\(name)"))
+                try HTTPRetry.ensureOK(gResp, gData)
+                return try JSONDecoder().decode(FileInfo.self, from: gData)
+            }
         }
         guard info.state == "ACTIVE", let uri = info.uri else { throw PipelineError.fileNotReady(info.state ?? "?") }
         return (uri, info.mimeType ?? mime)
     }
 
-    func generate(model: String, parts: [[String: Any]]) async throws -> String {
+    func generate(model: String, parts: [[String: Any]], progress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         let body: [String: Any] = [
             "contents": [["role": "user", "parts": parts]],
             "generationConfig": ["temperature": 0.2],
         ]
-        var req = URLRequest(url: URL(string: "\(base)/v1beta/models/\(model):generateContent?key=\(apiKey)")!)
+        var req = authed("/v1beta/models/\(model):generateContent")
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try ensureOK(resp, data)
-        let decoded = try JSONDecoder().decode(GenResponse.self, from: data)
+        let requestToSend = req
+        let decoded = try await HTTPRetry.withRetry(label: "Gemini", policy: .modelCall, progress: progress) { () -> GenResponse in
+            let (d, resp) = try await URLSession.shared.data(for: requestToSend)
+            try HTTPRetry.ensureOK(resp, d)
+            return try JSONDecoder().decode(GenResponse.self, from: d)
+        }
         let text = decoded.candidates?.first?.content?.parts?.compactMap { $0.text }.joined() ?? ""
         if text.isEmpty { throw PipelineError.badResponse("empty Gemini output") }
         return text
-    }
-
-    private func ensureOK(_ resp: URLResponse, _ data: Data) throws {
-        guard let http = resp as? HTTPURLResponse else { return }
-        guard (200..<300).contains(http.statusCode) else {
-            throw PipelineError.http(http.statusCode, String((String(data: data, encoding: .utf8) ?? "").prefix(400)))
-        }
     }
 }
 
@@ -102,30 +122,48 @@ struct GeminiTranscriber: Transcriber {
         defer { try? FileManager.default.removeItem(at: work) }
 
         // Chunk each track into aligned windows (single window if short enough).
-        var perTrack: [[AudioTools.Chunk]] = []
+        // `let`, not `var`: the per-window closure below runs as a `@Sendable`
+        // closure argument to `CloudChunkTranscription.run`, and a captured
+        // `var` there is a Swift 6 strict-concurrency error, not just a style
+        // preference.
+        var builtPerTrack: [[AudioTools.Chunk]] = []
         for t in tracks {
-            perTrack.append(try await AudioTools.chunk(
+            builtPerTrack.append(try await AudioTools.chunk(
                 t.url, chunkSeconds: kMeetGistChunkSeconds,
                 workDir: work.appendingPathComponent(t.label)))
         }
+        let perTrack = builtPerTrack
         let windows = perTrack.map(\.count).max() ?? 1
         let chunked = (maxDur ?? 0) > kMeetGistChunkSeconds && windows > 1
 
-        var parts: [String] = []
-        for i in 0..<windows {
+        // Each "window" already spans every track (mic + system uploaded and
+        // sent together in one generateContent call), so the checkpoint unit
+        // here is one window, not one track. Persisted text is the final,
+        // already-offset-adjusted segment — the same string this function
+        // used to just append to `parts` — so a resumed run needs no extra
+        // bookkeeping to re-derive the offset.
+        let checkpoint = CloudTranscriptionCheckpoint(
+            sessionDir: sessionDir,
+            configID: cloudTranscriptionConfigID(
+                style: "gemini", model: model, baseURL: baseURL, chunkSeconds: kMeetGistChunkSeconds,
+                options: [micExists ? "mic" : nil, systemExists ? "sys" : nil].compactMap { $0 }))
+
+        let parts = try await CloudChunkTranscription.run(
+            checkpoint: checkpoint, track: "window", count: windows, progress: progress
+        ) { i in
             if windows > 1 { progress("Transcribing part \(i + 1)/\(windows)…") } else { progress("Transcribing…") }
             let offset = Double(i) * kMeetGistChunkSeconds
             var fileParts: [[String: Any]] = []
             for chunks in perTrack where i < chunks.count {
-                let f = try await http.upload(chunks[i].url)
+                let f = try await http.upload(chunks[i].url, progress: progress)
                 fileParts.append(["fileData": ["mimeType": f.mime, "fileUri": f.uri]])
             }
             let prompt = Prompts.transcript(micExists: micExists, systemExists: systemExists,
                                             segmentOffsetSeconds: chunked ? offset : nil)
-            let raw = try await http.generate(model: model, parts: [["text": prompt]] + fileParts)
+            let raw = try await http.generate(model: model, parts: [["text": prompt]] + fileParts, progress: progress)
             var seg = section(after: "---TRANSCRIPT---", in: raw)
             if chunked { seg = TranscriptText.offsetTimestamps(seg, by: offset) }
-            parts.append(seg)
+            return seg
         }
         return parts.joined(separator: "\n")
     }
@@ -142,6 +180,7 @@ struct GeminiNotesWriter: NotesWriter {
     let baseURL: String
     let model: String
     var template: String? = nil
+    var language: String = Prompts.defaultNotesLanguage
     var label: String { model }
 
     func notes(transcript: String,
@@ -149,11 +188,11 @@ struct GeminiNotesWriter: NotesWriter {
         progress("Writing minutes & summary…")
         let http = GeminiHTTP(apiKey: apiKey, base: baseURL)
         if let t = template, !t.isEmpty {
-            let out = try await http.generate(model: model, parts: [["text": Prompts.templatedNotes(t)], ["text": transcript]])
+            let out = try await http.generate(model: model, parts: [["text": Prompts.templatedNotes(t, language: language)], ["text": transcript]], progress: progress)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return (out, out)
         }
-        let raw = try await http.generate(model: model, parts: [["text": Prompts.polished], ["text": transcript]])
+        let raw = try await http.generate(model: model, parts: [["text": Prompts.polished(language: language)], ["text": transcript]], progress: progress)
         return splitPolished(raw)
     }
 }

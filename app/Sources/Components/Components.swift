@@ -94,21 +94,67 @@ struct TimerLabel: View {
 
 struct MintButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
+        MintButtonBody(configuration: configuration)
+    }
+}
+
+private struct MintButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    @Environment(\.isEnabled) private var isEnabled
+    var body: some View {
         configuration.label
             .font(Theme.ui(13, .semibold)).foregroundStyle(Theme.bg)
+            .lineLimit(1).fixedSize()
             .padding(.horizontal, 14).padding(.vertical, 7)
             .background(Theme.mint.opacity(configuration.isPressed ? 0.8 : 1))
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .opacity(isEnabled ? 1 : 0.4)
     }
 }
 
 struct GhostButton: ButtonStyle {
+    /// Tighter padding for icon-only buttons in dense toolbars.
+    var compact = false
     func makeBody(configuration: Configuration) -> some View {
+        GhostButtonBody(configuration: configuration, compact: compact)
+    }
+}
+
+private struct GhostButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let compact: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    var body: some View {
         configuration.label
             .font(Theme.ui(13)).foregroundStyle(Theme.text)
-            .padding(.horizontal, 14).padding(.vertical, 7)
+            .lineLimit(1).fixedSize()
+            .padding(.horizontal, compact ? 6 : 14).padding(.vertical, compact ? 4 : 7)
             .background(Theme.panel2.opacity(configuration.isPressed ? 0.6 : 1))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.line, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .opacity(isEnabled ? 1 : 0.45)
+    }
+}
+
+// MARK: Live recording readouts
+// Each observes `RecordingMeters` directly, so the 10 Hz ticker re-renders only
+// these small views instead of everything observing `AppState`.
+
+struct LiveTimer: View {
+    @ObservedObject var meters: RecordingMeters
+    var size: CGFloat = 13
+    var body: some View { TimerLabel(seconds: meters.elapsed, size: size) }
+}
+
+enum MeterTrack { case mic, system }
+
+struct LiveLevel: View {
+    @ObservedObject var meters: RecordingMeters
+    let track: MeterTrack
+    let label: String
+    var body: some View {
+        LabeledLevel(label: label,
+                     level: track == .mic ? meters.micLevel : meters.systemLevel,
+                     tint: track == .mic ? Theme.mint : Theme.teal)
     }
 }
