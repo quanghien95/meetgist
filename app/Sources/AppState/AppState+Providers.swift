@@ -27,7 +27,7 @@ extension AppState {
     }
     func saveKey(_ k: String, for p: Provider) {
         do {
-            try Keychain.set(k.trimmingCharacters(in: .whitespacesAndNewlines), for: p.keyAccount)
+            try keyStore(k.trimmingCharacters(in: .whitespacesAndNewlines), p.keyAccount)
         } catch {
             lastError = error.localizedDescription
             status = tr(L.couldNotSaveAPIKey)

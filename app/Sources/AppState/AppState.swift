@@ -107,6 +107,9 @@ final class AppState: ObservableObject {
     /// `Keychain.get` directly, so tests can supply fake keys without touching
     /// the real Keychain. Production default is the real Keychain lookup.
     let keyLookup: (String) -> String?
+    /// Test seam paired with `keyLookup`: how `saveKey` stores a key (empty
+    /// value deletes). Production default is the real Keychain.
+    let keyStore: (_ value: String, _ account: String) throws -> Void
     /// Test seam: builds the cloud pipeline `processCloud` drives. Production
     /// default is the real `Pipelines.make`, which talks to actual cloud
     /// providers; tests substitute a fake `MeetingPipeline` (e.g. one that
@@ -219,6 +222,8 @@ final class AppState: ObservableObject {
     ///   - keyLookup: How `key(for:)`/`hasKey(_:)` resolve a provider's API
     ///     key. Production default is the real Keychain; tests supply fake
     ///     keys.
+    ///   - keyStore: How `saveKey` writes one. Pair it with `keyLookup` in
+    ///     tests so saved keys are visible to `hasKey`.
     ///   - offlineRuntime, qwenASRRuntime, localNotesRuntime: Runtime managers
     ///     for the app-managed local engines. Production default constructs
     ///     each with its real Application Support root; tests can pass
@@ -228,11 +233,13 @@ final class AppState: ObservableObject {
     init(userDefaults: UserDefaults = .standard,
          initialOutputDir: URL? = nil,
          keyLookup: @escaping (String) -> String? = Keychain.get,
+         keyStore: @escaping (_ value: String, _ account: String) throws -> Void = { try Keychain.set($0, for: $1) },
          offlineRuntime: OfflineRuntimeManager? = nil,
          qwenASRRuntime: Qwen3ASRRuntimeManager? = nil,
          localNotesRuntime: LocalNotesRuntimeManager? = nil) {
         self.defaults = userDefaults
         self.keyLookup = keyLookup
+        self.keyStore = keyStore
         self.offlineRuntime = offlineRuntime ?? OfflineRuntimeManager()
         self.qwenASRRuntime = qwenASRRuntime ?? Qwen3ASRRuntimeManager()
         self.localNotesRuntime = localNotesRuntime ?? LocalNotesRuntimeManager()

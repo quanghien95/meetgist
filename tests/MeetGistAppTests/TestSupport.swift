@@ -20,7 +20,8 @@ enum AppStateTestSupport {
     /// - Parameter keyLookup: stands in for `Keychain.get`; defaults to "no
     ///   provider has a key" so callers that don't care about key state get a
     ///   deterministic, harmless default.
-    static func makeAppState(keyLookup: @escaping (String) -> String? = { _ in nil })
+    static func makeAppState(keyLookup: @escaping (String) -> String? = { _ in nil },
+                             keyStore: @escaping (String, String) throws -> Void = { _, _ in })
         throws -> (state: AppState, cleanup: () -> Void) {
         let suiteName = "meetgist-apptests-\(UUID().uuidString)"
         guard let suite = UserDefaults(suiteName: suiteName) else {
@@ -35,6 +36,7 @@ enum AppStateTestSupport {
             userDefaults: suite,
             initialOutputDir: outputDir,
             keyLookup: keyLookup,
+            keyStore: keyStore,
             offlineRuntime: OfflineRuntimeManager(root: root.appendingPathComponent("OfflineWhisper")),
             qwenASRRuntime: Qwen3ASRRuntimeManager(root: root.appendingPathComponent("Qwen3ASR")),
             localNotesRuntime: LocalNotesRuntimeManager(root: root.appendingPathComponent("LocalNotes"))

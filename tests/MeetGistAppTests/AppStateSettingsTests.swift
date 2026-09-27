@@ -75,4 +75,21 @@ import MeetGistKit
         let apple = try #require(ProviderCatalog.builtIn.first { $0.id == "apple-foundation-models" })
         #expect(state.hasKey(apple) == true)
     }
+
+    /// saveKey goes through the injected store (never the real Keychain in
+    /// tests) and hasKeys reflects it once lookup sees the saved value.
+    @Test func saveKeyUsesInjectedStoreAndUpdatesReadiness() throws {
+        final class Box: @unchecked Sendable { var keys: [String: String] = [:] }
+        let box = Box()
+        let (state, cleanup) = try AppStateTestSupport.makeAppState(
+            keyLookup: { box.keys[$0] },
+            keyStore: { value, account in box.keys[account] = value.isEmpty ? nil : value })
+        defer { cleanup() }
+        state.transcriptionProviderID = "gemini"
+        state.notesProviderID = "gemini"
+        #expect(!state.hasKeys)
+        state.saveKey("  secret-test-key \n", for: state.transcriptionProvider)
+        #expect(box.keys["apikey.gemini"] == "secret-test-key")
+        #expect(state.hasKeys)
+    }
 }
