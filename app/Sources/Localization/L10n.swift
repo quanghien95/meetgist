@@ -109,7 +109,10 @@ enum L {
     static let noMeetings = LStr(en: "No meetings yet. Press Record (or ⌥⌘K) to start.",
                                  zh: "还没有记录。按下录制（或 ⌥⌘K）开始。")
     static let record     = LStr(en: "Record", zh: "录制")
-    static let importAudio = LStr(en: "Import Audio…", zh: "导入音频…")
+    static let importMedia = LStr(en: "Import Audio or Video…", zh: "导入音频或视频…")
+    static let importMediaDescription = LStr(
+        en: "Import audio or video. Only audio is saved; the original file stays unchanged.",
+        zh: "导入音频或视频。仅保存音频，原文件保持不变。")
     static let loadingMeetings = LStr(en: "Loading meetings…", zh: "正在加载会议…")
     static let meetingsCount = LStr(en: "meetings", zh: "个会议")
     static let emptyHint  = LStr(
@@ -211,10 +214,10 @@ enum L {
     static let stopRecordingBeforeGenerateNotes = LStr(
         en: "Stop recording before generating meeting notes.", zh: "请先停止录制，再生成会议纪要。")
     static let stopRecordingBeforeImport = LStr(
-        en: "Stop recording before importing audio.", zh: "请先停止录制，再导入音频。")
+        en: "Stop recording before importing audio or video.", zh: "请先停止录制，再导入音频或视频。")
     static let waitCurrentTaskBeforeImport = LStr(
-        en: "Wait for the current task to finish before importing audio.",
-        zh: "请先等待当前任务完成，再导入音频。")
+        en: "Wait for the current task to finish before importing audio or video.",
+        zh: "请先等待当前任务完成，再导入音频或视频。")
     static let waitProcessingFinish = LStr(en: "Wait for processing to finish.", zh: "请等待处理完成。")
     static let anotherProcessingRunning = LStr(
         en: "Another processing task is already running.", zh: "另一项处理任务正在进行中。")
@@ -403,4 +406,45 @@ enum L {
 
     // MARK: - Library
     static let oneMeeting = LStr(en: "1 meeting", zh: "1 个会议")
+
+    // MARK: - Live Assist (V1 Live Meeting Copilot)
+    static let liveAssist = LStr(en: "Live Assist", zh: "实时助手")
+    static let liveAssistSectionTitle = LStr(en: "Live Assist", zh: "实时助手")
+    static let liveAssistEnableToggle = LStr(
+        en: "Show live meaning, questions, and notes while recording",
+        zh: "录制时显示实时含义、问题和笔记")
+    static let liveAssistProviderLabel = LStr(en: "Live Assist provider", zh: "实时助手服务商")
+    static let liveAssistProviderDefaultHint = LStr(
+        en: "Default: same as your Notes provider (cloud only)", zh: "默认：与笔记服务商相同（仅限云端）")
+    static let liveAssistModelOverrideLabel = LStr(en: "Live Assist model override", zh: "实时助手模型覆盖")
+    static let liveAnalyzeMicToggle = LStr(
+        en: "Also analyze what I say (off by default — for in-person meetings)",
+        zh: "同时分析我自己说的话（默认关闭——适用于线下会议）")
+    static func liveAssistPrivacyNote(_ provider: String) -> LStr {
+        LStr(en: "Live Assist sends transcribed text (never audio) of recent turns to \(provider).",
+             zh: "实时助手会将最近发言的文本（绝不包含音频）发送给 \(provider)。")
+    }
+    static let liveASRSectionTitle = LStr(en: "Live ASR (realtime transcription)", zh: "实时转录引擎")
+    static let liveASRRequiresAppleSilicon = LStr(
+        en: "Live Assist's realtime transcription requires Apple Silicon.", zh: "实时助手的实时转录需要 Apple 芯片。")
+
+    // Live Assist panel status chip
+    static let liveStatusListening = LStr(en: "Listening", zh: "聆听中")
+    static let liveStatusAnalyzing = LStr(en: "Analyzing…", zh: "分析中…")
+    static let liveStatusIdle = LStr(en: "Idle", zh: "空闲")
+    static let liveStatusMalformed = LStr(en: "Understanding response…", zh: "正在解析回复…")
+    static let liveStatusProviderRetrying = LStr(en: "Provider unavailable — retrying…", zh: "服务商暂不可用——正在重试…")
+    static let liveStatusCodexUnavailable = LStr(en: "Codex CLI unavailable", zh: "Codex CLI 不可用")
+    static let liveStatusASRUnavailable = LStr(en: "Live transcription unavailable", zh: "实时转录不可用")
+    static let liveStatusChooseProvider = LStr(en: "Choose a cloud provider for Live Assist", zh: "请为实时助手选择一个云端服务商")
+    static let liveStatusASRNotInstalled = LStr(en: "Install Live ASR in Settings", zh: "请在设置中安装实时转录引擎")
+    static let liveAssistWaitingForSpeech = LStr(en: "Waiting for speech…", zh: "等待发言中…")
+
+    // MARK: - Live Assist V2 (Suggest Answer / Ask Meet Gist)
+    static let liveAutoSuggestToggle = LStr(
+        en: "Automatically suggest an answer when a question is detected",
+        zh: "检测到问题时自动建议回答")
+    static let liveContextChooseButton = LStr(en: "Choose file…", zh: "选择文件…")
+    static let liveContextClearButton = LStr(en: "Clear", zh: "清除")
+    static let liveContextLabel = LStr(en: "Context file", zh: "参考文件")
 }

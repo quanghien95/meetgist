@@ -41,26 +41,48 @@ Prerequisites: macOS 14+ on Apple Silicon, Xcode Command Line Tools
 Or step by step:
 
 ```bash
-swift build -c release     # rebuild the recorder after editing Sources/
+sh build.sh                # rebuild the recorder and app (release)
 make setup                 # (re)create the Python venv from scripts/requirements.txt
 ```
 
 ## Before you open a PR
 
 ```bash
-swift build -c release                                   # must compile cleanly (CLI + app target)
+sh build.sh                                             # release build (CLI + app target)
 make test                                                # Swift Testing suite + Python unit tests
 bash -n meetgist-toggle.sh scripts/transcribe_meeting.sh  # shell scripts parse
 python3 -m py_compile scripts/*.py                       # python compiles
 ```
 
 `make test` works with either full Xcode or just the Command Line Tools (it adds
-the extra Swift Testing framework flags the CLT toolchain needs). A clean build
-of the app target does need full Xcode: the `KeyboardShortcuts` dependency uses
-`#Preview`, whose macro plugin ships only with Xcode. Swift tests live
+the extra Swift Testing framework flags the CLT toolchain needs). The app's
+SwiftPM compile check works with macOS 27 Command Line Tools: the pinned local
+`Vendor/KeyboardShortcuts` copy omits preview-only macros, and SwiftUI state
+uses the SDK's compatible property wrapper through `CompatibleState`. Building
+the signed `.app` with `make app` still requires full Xcode. Swift tests live
 in `tests/MeetGistKitTests/` and use Swift Testing (`import Testing`), not XCTest.
 There is no CI: run these checks locally before pushing. `MEETGIST_NETWORK_TESTS=1 make test`
 also runs the opt-in tests that hit the network (real pinned CPython download).
+
+`sh build.sh` and `make build` retain release optimization and the existing
+`.build/release/meetgist` / `.build/release/MeetGistApp` outputs. The script
+anchors the package path to its own directory and never cleans the cache.
+On Swift 6.4 with standalone Command Line Tools, it temporarily selects the
+`native` backend: the new default `swiftbuild` backend adds invalid Xcode-style
+CLT search paths ([SwiftPM #10557](https://github.com/swiftlang/swift-package-manager/issues/10557)),
+and locally recompiles/relinks unchanged release targets. Other toolchains
+keep SwiftPM's default. Native's deprecation warning remains visible; revisit
+this workaround when upgrading the toolchain. To opt into the new backend:
+
+```bash
+MEETGIST_BUILD_SYSTEM=swiftbuild sh build.sh
+```
+
+The first build with a different backend has a separate cache to populate.
+Afterwards, unchanged builds should be quick. Release builds after code changes
+still take longer than debug builds because Swift optimizes whole modules.
+`swift build` remains the standard debug compile check; on CLT 27 its default
+backend can still emit the upstream search-path warnings.
 
 A good manual smoke test: record a short session (hotkey or `meetgist`), confirm
 `transcript.md` / `polished.md` / `summary.md` land in your output folder, and try

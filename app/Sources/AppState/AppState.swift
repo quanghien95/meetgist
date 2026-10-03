@@ -16,7 +16,9 @@ struct HUDEvent { let kind: HUDKind; let text: String }
 /// Which pipeline slot a per-provider model override applies to. Raw values
 /// are exactly the strings already persisted in UserDefaults keys — do not
 /// rename without a migration (see `AppState.Keys.modelOverride`).
-enum ProviderModelSlot: String { case transcribe, notes }
+/// `.live` is Live Assist's own model override slot (`model.<id>.live`,
+/// plan §5.11) — additive, doesn't touch `.transcribe`/`.notes`.
+enum ProviderModelSlot: String { case transcribe, notes, live }
 
 /// Whether the selected notes provider can currently generate minutes, and the
 /// exact user-visible strings to show when it can't. Keeping this the one
@@ -94,6 +96,32 @@ final class AppState: ObservableObject {
     @Published var offlineVocabulary: String { didSet { defaults.set(offlineVocabulary, forKey: Keys.offlineVocabulary) } }
     @Published var hasKeys = false
 
+    // Live Assist (V1 Live Meeting Copilot) — see AppState+LiveAssist.swift.
+    // Fully isolated from recording/transcription/notes: default off, and a
+    // throw anywhere in this path only ever touches `liveAssist` below, never
+    // `state`/`lastError`/`recorder`/`processTask`/`processGeneration`.
+    @Published var liveAssistEnabled: Bool { didSet { defaults.set(liveAssistEnabled, forKey: Keys.liveAssistEnabled) } }
+    /// Empty means "use the Notes provider, if it's a cloud provider".
+    @Published var liveAssistProviderID: String {
+        didSet { defaults.set(liveAssistProviderID, forKey: Keys.liveAssistProvider); liveAssistProviderDidChange() }
+    }
+    @Published var liveAnalyzeMic: Bool { didSet { defaults.set(liveAnalyzeMic, forKey: Keys.liveAnalyzeMic) } }
+    /// V2 (plan §7.1): automatically press "Suggest Answer" the moment a new
+    /// question is detected. Default **off** — per plan, Suggested Answer is
+    /// an on-demand action; auto-firing it on every detected question would
+    /// multiply Codex CLI calls (each ~7s p50) well beyond what "realtime
+    /// speed over accuracy" calls for.
+    @Published var liveAutoSuggest: Bool { didSet { defaults.set(liveAutoSuggest, forKey: Keys.liveAutoSuggest) } }
+    /// Published UI state for the Live Assist panel — kept off `AppState`
+    /// itself (same reasoning as `meters`) so its per-turn updates don't
+    /// invalidate every other view observing `AppState`.
+    let liveAssist = LiveAssistState()
+    /// `internal`: the orchestrator for the current recording, set/cleared
+    /// only from `AppState+LiveAssist.swift`. `nil` whenever Live Assist is
+    /// off or not currently running.
+    var liveAssistSession: LiveAssistSession?
+    var liveAssistTask: Task<Void, Never>?
+
     /// Test seam: the `UserDefaults` domain every persisted setting reads from
     /// and writes to. Production default is `.standard`; tests inject a
     /// unique, empty suite (removed afterwards) so construction and settings
@@ -126,17 +154,38 @@ final class AppState: ObservableObject {
     var notesWriterFactory: (_ notes: Provider, _ notesKey: String?,
                              _ notesTemplate: String?, _ notesLanguage: String?) throws -> any NotesWriter
         = Pipelines.makeNotesWriter
+    /// Test seam (plan §5.11 "Test seams on AppState.init-style injection"):
+    /// builds the persistent live-ASR transcriber. Production default builds
+    /// a real `QwenLiveTranscriber` from the installed Live ASR runtime;
+    /// tests substitute a fake `RealtimeTranscriber` so Live Assist tests
+    /// never spawn Python or touch a real model.
+    var liveTranscriberFactory: @MainActor (_ runtime: LiveASRRuntimeManager, _ language: String, _ vocabulary: String,
+                                           _ logURL: URL?) throws -> any RealtimeTranscriber
+        = LiveAssistFactories.makeTranscriber
+    /// Test seam: builds the semantic `CopilotLLM` for the resolved Live
+    /// Assist provider. Production default is the real `CopilotLLMs.make`;
+    /// tests substitute a fake so Live Assist tests never touch the network.
+    var copilotLLMFactory: (_ provider: Provider, _ key: String?) throws -> any CopilotLLM = CopilotLLMs.make
+    /// Test seam: builds the speaker/mic `LiveAudioSource` pair for a
+    /// recording. Production default wraps the real `SessionRecorder`'s live
+    /// PCM sink and a real `LiveMicTap`; tests substitute fakes that call
+    /// `onChunk` directly with synthetic PCM so Live Assist tests never touch
+    /// real audio.
+    var liveAudioSourceFactory: (_ recorder: SessionRecorder) -> (speaker: any LiveAudioSource, mic: (any LiveAudioSource)?)
+        = LiveAssistFactories.makeAudioSources
 
     let offlineRuntime: OfflineRuntimeManager
     lazy var offlineCoordinator = OfflineJobCoordinator(runtime: offlineRuntime, workerResourceName: "offline_worker")
     let qwenASRRuntime: Qwen3ASRRuntimeManager
     lazy var qwenASRCoordinator = OfflineJobCoordinator(runtime: qwenASRRuntime, workerResourceName: "offline_worker_qwen")
     let localNotesRuntime: LocalNotesRuntimeManager
+    let liveASRRuntime: LiveASRRuntimeManager
     private var managerCancellables = Set<AnyCancellable>()
 
     /// Set by the app so AppState can flash the HUD on transitions.
     var hud: ((HUDEvent) -> Void)?
     private var mini: MiniController?
+    private var liveAssistPanel: LiveAssistPanel?
     private var meetingDetector: MeetingDetector?
     private let meetingPrompt = MeetingDetectedController()
     /// AppState is not a View and has no `@EnvironmentObject` Localization of
@@ -148,6 +197,9 @@ final class AppState: ObservableObject {
         self.loc = loc
         if mini == nil { mini = MiniController(state: self, loc: loc) }
     }
+    func installLiveAssistPanel(loc: Localization) {
+        if liveAssistPanel == nil { liveAssistPanel = LiveAssistPanel(state: self, loc: loc) }
+    }
     func installMeetingDetector() { if meetingDetector == nil { meetingDetector = MeetingDetector(state: self) } }
     func presentMeetingDetected(title: String) { meetingPrompt.present(state: self, title: title) }
     /// Localized text for a status/lastError string set from AppState. Falls
@@ -157,7 +209,7 @@ final class AppState: ObservableObject {
     func tr(_ s: LStr) -> String { loc?.t(s) ?? s.en }
 
     @Published var processStep = 0   // 0 = transcribing, 1 = summarizing
-    /// The in-flight cloud/offline/notes/post-process job, if any. `internal`
+    /// The in-flight import/cloud/offline/notes/post-process job, if any. `internal`
     /// (not `private`): started/cancelled from `AppState+Processing.swift`,
     /// cancelled-and-awaited from `AppState+Recording.swift` (`startRecording`)
     /// and `AppState+Runtimes.swift` (`removeLocalNotesRuntime`).
@@ -196,6 +248,10 @@ final class AppState: ObservableObject {
         static let offlineLanguage = "MeetGistOfflineLanguage", offlineVocabulary = "MeetGistOfflineVocabulary"
         static let detectMeetings = "MeetGistDetectMeetings", postProcessEnabled = "MeetGistPostProcessEnabled", postProcessSource = "MeetGistPostProcessSource"
         static let autoGenerateNotes = "MeetGistAutoGenerateNotes"
+        static let liveAssistEnabled = "MeetGistLiveAssistEnabled"
+        static let liveAssistProvider = "MeetGistLiveAssistProvider"
+        static let liveAnalyzeMic = "MeetGistLiveAnalyzeMic"
+        static let liveAutoSuggest = "MeetGistLiveAutoSuggest"
 
         /// Per-provider model override key, e.g. "model.gemini.transcribe".
         /// Exact same string shape as before this was declared here — existing
@@ -236,13 +292,15 @@ final class AppState: ObservableObject {
          keyStore: @escaping (_ value: String, _ account: String) throws -> Void = { try Keychain.set($0, for: $1) },
          offlineRuntime: OfflineRuntimeManager? = nil,
          qwenASRRuntime: Qwen3ASRRuntimeManager? = nil,
-         localNotesRuntime: LocalNotesRuntimeManager? = nil) {
+         localNotesRuntime: LocalNotesRuntimeManager? = nil,
+         liveASRRuntime: LiveASRRuntimeManager? = nil) {
         self.defaults = userDefaults
         self.keyLookup = keyLookup
         self.keyStore = keyStore
         self.offlineRuntime = offlineRuntime ?? OfflineRuntimeManager()
         self.qwenASRRuntime = qwenASRRuntime ?? Qwen3ASRRuntimeManager()
         self.localNotesRuntime = localNotesRuntime ?? LocalNotesRuntimeManager()
+        self.liveASRRuntime = liveASRRuntime ?? LiveASRRuntimeManager()
         let d = userDefaults, fm = FileManager.default
         if let s = d.string(forKey: Keys.output) { outputDir = URL(fileURLWithPath: (s as NSString).expandingTildeInPath) }
         else { outputDir = initialOutputDir ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Documents/meetgist") }
@@ -259,6 +317,10 @@ final class AppState: ObservableObject {
         notesProviderID = d.string(forKey: Keys.notes) ?? "gemini"
         offlineLanguage = d.string(forKey: Keys.offlineLanguage) ?? "auto"
         offlineVocabulary = d.string(forKey: Keys.offlineVocabulary) ?? HotwordPresets.defaultKeywords
+        liveAssistEnabled = (d.object(forKey: Keys.liveAssistEnabled) as? Bool) ?? false
+        liveAssistProviderID = d.string(forKey: Keys.liveAssistProvider) ?? ""
+        liveAnalyzeMic = (d.object(forKey: Keys.liveAnalyzeMic) as? Bool) ?? false
+        liveAutoSuggest = (d.object(forKey: Keys.liveAutoSuggest) as? Bool) ?? false
         if let data = d.data(forKey: Keys.custom), let arr = try? JSONDecoder().decode([Provider].self, from: data) { customProviders = arr }
         else { customProviders = [] }
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -272,6 +334,8 @@ final class AppState: ObservableObject {
         qwenASRCoordinator.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
         self.localNotesRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &managerCancellables)
+        self.liveASRRuntime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &managerCancellables)
         // refresh() and each coordinator's scan() do synchronous disk I/O per
         // session folder that scales with meeting count; both hop off the

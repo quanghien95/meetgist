@@ -31,6 +31,11 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
     private var buffersAppended: Int = 0
     private var lastSystemPeakDb: Float = -160   // live level (dBFS), on audioQueue
     private var paused = false
+    // Live Assist's optional, non-blocking PCM tap (plan §5.10). `nil` (the
+    // default) means byte-for-byte identical behavior to before this existed
+    // — the sample handler below only does the extra copy/callback when a
+    // sink is set. Mutated only on `audioQueue`, same as `paused`.
+    private var livePCMSink: (@Sendable (LivePCMChunk) -> Void)?
 
     /// Live system-audio peak in dBFS (≈ -160 = silent). Read on `audioQueue`.
     public func systemLevel() async -> Float {
@@ -41,6 +46,13 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
 
     /// While paused, buffers are dropped (leaving a silent gap in system.m4a).
     public func setPaused(_ p: Bool) { audioQueue.async { self.paused = p } }
+
+    /// Registers (or clears, with `nil`) Live Assist's optional PCM tap (plan
+    /// §5.10). Set on `audioQueue`, same queue the sample handler runs on, so
+    /// there's no race between changing the sink and reading it per buffer.
+    public func setLivePCMSink(_ sink: (@Sendable (LivePCMChunk) -> Void)?) {
+        audioQueue.async { self.livePCMSink = sink }
+    }
 
     public func start(outputURL: URL) async throws {
         requestedStartHostNs = DispatchTime.now().uptimeNanoseconds
@@ -187,6 +199,14 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
             input.append(sampleBuffer)
             buffersAppended += 1
         }
+
+        // Live Assist's tap (plan §5.10): only when a sink is set and not
+        // paused, after every existing append/level-metering step above —
+        // a copy handed off immediately, no throwing, no shared locks with
+        // the writer path.
+        if !paused, let livePCMSink, let chunk = Self.pcmChunk(from: sampleBuffer, hostTimeNs: nowNs) {
+            livePCMSink(chunk)
+        }
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -214,6 +234,105 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
             for i in 0..<n { peak = max(peak, abs(p[i])) }
         }
         lastSystemPeakDb = peak > 0 ? 20 * log10(peak) : -160
+    }
+
+    /// Copies the Float32 PCM out of `sb` for Live Assist's tap (review
+    /// finding F2, fixed 2026-09-27). ScreenCaptureKit audio is commonly
+    /// delivered as **non-interleaved** Float32 stereo — one `AudioBuffer`
+    /// per channel, not one interleaved buffer. The previous version passed
+    /// a single-`AudioBuffer`-sized list (`MemoryLayout<AudioBufferList>
+    /// .size`) to `CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer`,
+    /// which fails (`bufferListOut` too small) whenever CoreMedia actually
+    /// hands back 2 non-interleaved buffers — silently returning `nil`, i.e.
+    /// **no live system audio at all** — and even where it happened to
+    /// succeed, concatenating per-channel buffers back to back and then
+    /// treating that as interleaved data in `LiveAudioFeed.downmix` would
+    /// have produced garbage (channel 1's tail averaged against channel 2's
+    /// head).
+    ///
+    /// Fixed by: (1) querying `bufferListSizeNeededOut` first and allocating
+    /// a correctly sized list via `AudioBufferList.allocate(maximumBuffers:)`
+    /// (`mChannelsPerFrame` is always a safe upper bound: interleaved needs
+    /// exactly 1 buffer, fully non-interleaved needs exactly `channels`);
+    /// (2) checking `kAudioFormatFlagIsNonInterleaved` and, when set,
+    /// averaging every channel's buffer per frame and emitting **mono
+    /// directly** (`channels = 1`) instead of ever concatenating buffers —
+    /// this is the only shape `LiveAudioFeed.downmix`/`resample` need to
+    /// handle correctly regardless of the source layout. Interleaved input
+    /// (single buffer) is copied through unchanged, exactly as before.
+    ///
+    /// This function only ever runs when `livePCMSink` is set (see the call
+    /// site above) — with no sink, `stream(_:didOutputSampleBuffer:)`'s
+    /// behavior is untouched, byte for byte.
+    ///
+    /// Deliberately **not** changed: `updateSystemPeak` above uses the same
+    /// single-buffer pattern this function used to use, and is suspected of
+    /// the same non-interleaved bug (the live system-level meter may read
+    /// silence) — see docs/live-copilot-plan.md §11 for that follow-up; it's
+    /// out of scope here per the "minimal Recorder.swift change" instruction
+    /// and isn't part of the Live Assist PCM path this fixes.
+    static func pcmChunk(from sb: CMSampleBuffer, hostTimeNs: UInt64) -> LivePCMChunk? {
+        guard let fmt = CMSampleBufferGetFormatDescription(sb),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt)?.pointee,
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 else { return nil }
+
+        var sizeNeeded = 0
+        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sb, bufferListSizeNeededOut: &sizeNeeded, bufferListOut: nil, bufferListSize: 0,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: nil)
+        guard sizeStatus == noErr, sizeNeeded > 0 else { return nil }
+
+        // Non-interleaved audio needs one `AudioBuffer` per channel;
+        // interleaved needs exactly one — `mChannelsPerFrame` is a safe
+        // upper bound either way.
+        let maxBuffers = max(1, Int(asbd.mChannelsPerFrame))
+        let listStorage = AudioBufferList.allocate(maximumBuffers: maxBuffers)
+        defer { free(listStorage.unsafeMutablePointer) }
+
+        var bb: CMBlockBuffer?
+        let fillStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sb, bufferListSizeNeededOut: nil, bufferListOut: listStorage.unsafeMutablePointer,
+            bufferListSize: sizeNeeded, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &bb)
+        guard fillStatus == noErr else { return nil }
+
+        let buffers = Array(UnsafeMutableAudioBufferListPointer(listStorage.unsafeMutablePointer))
+        guard !buffers.isEmpty else { return nil }
+        let isNonInterleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
+
+        if !isNonInterleaved || buffers.count == 1 {
+            // Single (interleaved, or already-mono) buffer — copy through
+            // unchanged, exactly as the previous implementation did.
+            guard let data = buffers[0].mData else { return nil }
+            let n = Int(buffers[0].mDataByteSize) / MemoryLayout<Float>.size
+            guard n > 0 else { return nil }
+            let p = data.assumingMemoryBound(to: Float.self)
+            let samples = Array(UnsafeBufferPointer(start: p, count: n))
+            let channels = max(1, Int(buffers[0].mNumberChannels))
+            return LivePCMChunk(samples: samples, sampleRate: asbd.mSampleRate, channels: channels, hostTimeNs: hostTimeNs)
+        }
+
+        // Non-interleaved: one buffer per channel. Average across channels
+        // per frame and emit mono directly (channels = 1) — never
+        // concatenate buffers, which would be treated as interleaved
+        // garbage downstream.
+        let frameCount = Int(buffers[0].mDataByteSize) / MemoryLayout<Float>.size
+        guard frameCount > 0 else { return nil }
+        var channelPointers: [UnsafePointer<Float>] = []
+        channelPointers.reserveCapacity(buffers.count)
+        for buf in buffers {
+            guard let data = buf.mData, Int(buf.mDataByteSize) / MemoryLayout<Float>.size == frameCount else { return nil }
+            channelPointers.append(data.assumingMemoryBound(to: Float.self))
+        }
+        let scale = 1 / Float(channelPointers.count)
+        var mono = [Float](repeating: 0, count: frameCount)
+        for i in 0..<frameCount {
+            var sum: Float = 0
+            for pointer in channelPointers { sum += pointer[i] }
+            mono[i] = sum * scale
+        }
+        return LivePCMChunk(samples: mono, sampleRate: asbd.mSampleRate, channels: 1, hostTimeNs: hostTimeNs)
     }
 }
 

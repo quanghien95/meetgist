@@ -32,4 +32,13 @@ extension AppState {
             catch { lastError = error.localizedDescription }
         }
     }
+    /// Live ASR's runtime never touches `recorder`/`processTask` — Live
+    /// Assist is fully isolated from recording/transcription/notes, so unlike
+    /// the other three, install/remove here never needs to stop or await
+    /// anything else in flight.
+    func installLiveASRRuntime() { Task { await liveASRRuntime.install() } }
+    func removeLiveASRRuntime() {
+        do { try liveASRRuntime.remove() }
+        catch { lastError = error.localizedDescription }
+    }
 }

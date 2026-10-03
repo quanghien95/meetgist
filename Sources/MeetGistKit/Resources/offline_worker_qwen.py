@@ -5,9 +5,9 @@
 Mirrors offline_worker.py's resumable chunk/state/part contract exactly, so
 OfflineJobStore/OfflineJobCoordinator on the Swift side need no changes to
 support this engine. The one structural difference: Qwen3-ASR returns one
-text block per call rather than per-sentence segments, so each chunk here
-commits exactly one OfflineSegment spanning the whole chunk instead of many
-small ones.
+text block per call rather than per-sentence segments. A chunk normally
+commits one OfflineSegment; a pathological output can be retried on shorter
+audio and commits one segment per successful retry window.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import argparse
 import json
 import math
 import os
+import re
 import signal
 import sys
 import time
@@ -26,12 +27,18 @@ SCHEMA_VERSION = 1
 ENGINE = "qwen3-asr"
 MODEL = "mlx-community/Qwen3-ASR-1.7B-4bit"
 SAMPLE_RATE = 16_000
+MAX_GENERATION_TOKENS = 512
+MIN_RETRY_SECONDS = 7.5
 TRACKS = (
     ("system", "system.m4a", "Speaker"),
     ("mic", "mic.m4a", "Me"),
 )
 
 _stop_requested = False
+
+
+class QwenOutputTooLong(Exception):
+    """The model exhausted its output budget before reaching an end token."""
 
 
 def _request_stop(_signum: int, _frame: Any) -> None:
@@ -169,6 +176,45 @@ def is_silent(audio: Any) -> bool:
     return not has_meaningful_speech(audio)
 
 
+def has_runaway_repetition(text: str) -> bool:
+    """Catch consecutive phrase loops without editing legitimate transcript text."""
+    words = re.findall(r"\w+", text.casefold())
+    for width in range(3, 9):
+        for start in range(len(words) - 4 * width + 1):
+            phrase = words[start : start + width]
+            if all(words[start + i * width : start + (i + 1) * width] == phrase for i in range(1, 4)):
+                return True
+    return False
+
+
+def transcribe_segments(
+    transcriber: Any, audio: Any, start_seconds: float, language: str | None,
+    hotwords: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Retry a pathological Qwen output on smaller, non-overlapping audio."""
+    if _stop_requested or not has_meaningful_speech(audio):
+        return []
+    duration = len(audio) / SAMPLE_RATE
+    try:
+        text = transcriber.transcribe(audio, language=language, hotwords=hotwords)
+    except QwenOutputTooLong:
+        text = None
+    if _stop_requested:
+        return []
+    # A 30-second utterance cannot plausibly contain this much text. Keep
+    # the raw output out of part files and split the audio instead of trying
+    # to cut a loop from text (which could discard real speech afterward).
+    if text is None or len(text) > 2_000 or has_runaway_repetition(text):
+        if duration <= MIN_RETRY_SECONDS:
+            raise RuntimeError("Qwen3-ASR produced repeated or excessive text on a short audio segment")
+        midpoint = len(audio) // 2
+        boundary = start_seconds + midpoint / SAMPLE_RATE
+        return (transcribe_segments(transcriber, audio[:midpoint], start_seconds, language, hotwords)
+                + transcribe_segments(transcriber, audio[midpoint:], boundary, language, hotwords))
+    return ([{"start_seconds": round(start_seconds, 3),
+              "end_seconds": round(start_seconds + duration, 3), "text": text}] if text else [])
+
+
 def _committed_parts(
     parts_dir: Path, state: dict[str, Any], durations: dict[str, float]
 ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, float], list[float]]:
@@ -285,8 +331,13 @@ class _Qwen3ASRTranscriber:
             audio,
             language=language,
             hotwords=hotwords if hotwords else None,
+            max_tokens=MAX_GENERATION_TOKENS,
             verbose=False,
         )
+        if result.generation_tokens >= MAX_GENERATION_TOKENS:
+            # A capped decode may be truncated even if it has no obvious loop.
+            # The caller retries this audio as two smaller windows.
+            raise QwenOutputTooLong
         return (result.text or "").strip()
 
 
@@ -398,18 +449,10 @@ def run_job(
             language = config.get("language")
             language = None if not language or language == "auto" else language
             hotwords = _hotwords_from_vocabulary(str(config.get("vocabulary") or ""))
-            if has_meaningful_speech(chunk_audio):
-                text = transcriber.transcribe(chunk_audio, language=language, hotwords=hotwords)
-            else:
-                text = ""
+            segments = transcribe_segments(transcriber, chunk_audio, chunk["core_start"], language, hotwords)
             if _stop_requested:
                 del audio
                 return 75
-            segments = (
-                [{"start_seconds": round(chunk["core_start"], 3), "end_seconds": round(chunk["core_end"], 3), "text": text}]
-                if text
-                else []
-            )
             part = {
                 "schema_version": SCHEMA_VERSION,
                 "job_id": state["job_id"],

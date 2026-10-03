@@ -11,7 +11,7 @@ let package = Package(
         .executable(name: "MeetGistApp", targets: ["MeetGistApp"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", from: "2.2.0"),
+        .package(path: "Vendor/KeyboardShortcuts"),
     ],
     targets: [
         .target(
@@ -21,7 +21,8 @@ let package = Package(
                         .copy("Resources/offline_worker_qwen.py"),
                         .copy("Resources/offline-requirements-qwen.lock"),
                         .copy("Resources/qwen_notes_worker.py"),
-                        .copy("Resources/qwen-notes-requirements.lock")]
+                        .copy("Resources/qwen-notes-requirements.lock"),
+                        .copy("Resources/live_asr_worker.py")]
         ),
         .executableTarget(name: "meetgist", dependencies: ["MeetGistKit"]),
         // SwiftUI app sources live in app/Sources and are the source of truth for

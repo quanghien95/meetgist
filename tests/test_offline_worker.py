@@ -367,6 +367,31 @@ class OfflineWorkerTests(unittest.TestCase):
             silent_part = json.loads((parts / "system-0001.json").read_text())
             self.assertEqual(silent_part["segments"], [])
 
+    def test_mic_track_uses_canonical_audio(self):
+        """A leftover derived file must never replace canonical mic audio."""
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary) / "session"
+            (session / "transcription" / "parts").mkdir(parents=True)
+            (session / "mic.m4a").write_bytes(b"audio")
+            (session / "transcription" / "mic.aec.wav").write_bytes(b"stale derived audio")
+            state = initial_state(duration=6.0)
+            state["tracks"] = {"mic": {"duration_seconds": 6.0}}
+            worker.atomic_json(session / "transcription" / "state.json", state)
+            decoded_paths = []
+
+            def decode(path, _sr):
+                decoded_paths.append(path)
+                return FakeAudio(6 * worker.SAMPLE_RATE)
+
+            result = worker.run_job(
+                session, Path("model"),
+                transcriber_factory=lambda *_args: FakeModel(),
+                decode=decode,
+            )
+
+            self.assertEqual(result, 0)
+            self.assertEqual(decoded_paths, [str(session / "mic.m4a")])
+
 
 if __name__ == "__main__":
     unittest.main()

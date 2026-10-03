@@ -8,6 +8,7 @@ BINARY := .build/release/meetgist
 # the flags when they're actually needed.
 CLT_TESTING_FRAMEWORKS := /Library/Developer/CommandLineTools/Library/Developer/Frameworks
 CLT_TESTING_LIB        := /Library/Developer/CommandLineTools/Library/Developer/usr/lib
+CLT_TESTING_PLUGINS    := /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
 
 # --- Native .app (real, stably-signed, installable) ---------------------------
 APP_PROJECT  := app/MeetGist.xcodeproj
@@ -17,7 +18,7 @@ DERIVED      := $(PWD)/.build/xcode
 APP_BUILT    := $(DERIVED)/Build/Products/Release/MeetGist.app
 
 build:
-	swift build -c release
+	sh build.sh
 
 setup:
 	cd scripts && python3 -m venv .venv && .venv/bin/python3 -m pip install -r requirements.txt
@@ -41,6 +42,7 @@ test:
 			-Xlinker -F -Xlinker $(CLT_TESTING_FRAMEWORKS) \
 			-Xlinker -rpath -Xlinker $(CLT_TESTING_FRAMEWORKS) \
 			-Xlinker -rpath -Xlinker $(CLT_TESTING_LIB) \
+			-Xswiftc -plugin-path -Xswiftc $(CLT_TESTING_PLUGINS) \
 			-Xswiftc -Xfrontend -Xswiftc -disable-cross-import-overlays; \
 	else \
 		swift test; \

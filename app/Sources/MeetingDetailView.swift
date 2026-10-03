@@ -8,10 +8,10 @@ struct MeetingDetailView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
     let meeting: Meeting
-    @State private var tab = Tab.summary
-    @State private var showRetranscribeConfirmation = false
-    @State private var isEditingTitle = false
-    @State private var titleDraft = ""
+    @CompatibleState private var tab = Tab.summary
+    @CompatibleState private var showRetranscribeConfirmation = false
+    @CompatibleState private var isEditingTitle = false
+    @CompatibleState private var titleDraft = ""
     @FocusState private var titleFieldFocused: Bool
     // Reading transcript.md/polished.md/summary.md and parsing the Markdown into
     // an AttributedString were both happening synchronously inside `body` (a
@@ -19,9 +19,9 @@ struct MeetingDetailView: View {
     // and full Markdown parse on every redraw, not just on selection — the
     // measured 1-2s open lag. Now loaded once per (meeting, tab) off the main
     // thread in `.task`, and cached here instead of recomputed per body pass.
-    @State private var renderedContent: [MarkdownBlock]?
-    @State private var rawContent: String?
-    @State private var contentStats: (words: Int, characters: Int)?
+    @CompatibleState private var renderedContent: [MarkdownBlock]?
+    @CompatibleState private var rawContent: String?
+    @CompatibleState private var contentStats: (words: Int, characters: Int)?
     // The transcript tab renders one row per `[MM:SS] Speaker: …` line in a
     // LazyVStack instead of one giant Text(AttributedString): a single Text
     // forces SwiftUI to lay out the entire transcript (often 1000+ lines) up
@@ -29,7 +29,7 @@ struct MeetingDetailView: View {
     // per-tab-switch cost after the async load fix. Markdown parsing is also
     // skipped for this tab since transcript.md is plain timestamped lines,
     // not Markdown — parsing it was pure overhead.
-    @State private var transcriptLines: [String]?
+    @CompatibleState private var transcriptLines: [String]?
 
     enum Tab: Hashable { case summary, minutes, transcript, postProcess }
 

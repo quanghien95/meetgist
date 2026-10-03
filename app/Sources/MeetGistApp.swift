@@ -65,6 +65,7 @@ struct MeetGistApp: App {
     @MainActor private func setup() {
         state.hud = { [hud] event in hud.flash(event) }
         state.installMiniController(loc: loc)
+        state.installLiveAssistPanel(loc: loc)
         state.installMeetingDetector()
         if !Self.hotkeyRegistered {
             Self.hotkeyRegistered = true

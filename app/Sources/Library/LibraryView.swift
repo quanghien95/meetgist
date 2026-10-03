@@ -6,12 +6,12 @@ import MeetGistKit
 struct LibraryView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
-    @State private var query = ""
-    @State private var meetingToRename: Meeting?
-    @State private var renameText = ""
-    @State private var meetingToDelete: Meeting?
-    @State private var showRename = false
-    @State private var showDelete = false
+    @CompatibleState private var query = ""
+    @CompatibleState private var meetingToRename: Meeting?
+    @CompatibleState private var renameText = ""
+    @CompatibleState private var meetingToDelete: Meeting?
+    @CompatibleState private var showRename = false
+    @CompatibleState private var showDelete = false
 
     private var filtered: [Meeting] {
         guard !query.isEmpty else { return state.meetings }
@@ -47,13 +47,14 @@ struct LibraryView: View {
                     }
                     .padding(8).background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
 
-                    Button { state.importAudio() } label: {
+                    Button { state.importMedia() } label: {
                         Image(systemName: "plus")
                     }
                     .buttonStyle(.plain)
                     .frame(width: 28, height: 28)
                     .background(Theme.panel2).clipShape(RoundedRectangle(cornerRadius: 7))
-                    .help(loc.t(L.importAudio))
+                    .help(loc.t(L.importMedia))
+                    .accessibilityLabel(loc.t(L.importMedia))
                 }
                 .padding(10)
 

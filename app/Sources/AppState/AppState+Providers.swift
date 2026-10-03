@@ -38,6 +38,7 @@ extension AppState {
         defaults.set(m.trimmingCharacters(in: .whitespacesAndNewlines),
                      forKey: Keys.modelOverride(providerID: p.id, slot: slot))
         objectWillChange.send()
+        if slot == .live { liveAssistProviderDidChange() }
     }
     func modelOverride(_ p: Provider, slot: ProviderModelSlot) -> String {
         defaults.string(forKey: Keys.modelOverride(providerID: p.id, slot: slot)) ?? ""
@@ -107,7 +108,8 @@ extension AppState {
     var canGenerateMinutes: Bool { notesReadiness(for: notesProvider).isReady }
     var offlineConfig: OfflineJobConfig {
         let (engine, model) = ProviderCatalog.offlineEngineConfig(for: transcriptionProviderID)
-        return OfflineJobConfig(engine: engine, model: model, language: offlineLanguage, vocabulary: offlineVocabulary)
+        return OfflineJobConfig(engine: engine, model: model, language: offlineLanguage, vocabulary: offlineVocabulary,
+                                chunkSeconds: engine == qwenASREngine ? 30 : 300)
     }
     /// `internal` (not `private`): called from `init` (`AppState.swift`), from
     /// `transcriptionProviderID`/`notesProviderID`'s `didSet` (`AppState.swift`),

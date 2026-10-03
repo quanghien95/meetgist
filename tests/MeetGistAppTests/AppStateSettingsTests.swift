@@ -28,6 +28,10 @@ import MeetGistKit
             localNotesRuntime: LocalNotesRuntimeManager(root: root.appendingPathComponent("LocalNotes"))
         )
 
+        state.transcriptionProviderID = ProviderCatalog.offlineQwen3ASRID
+        #expect(state.offlineConfig.chunkSeconds == 30)
+        state.transcriptionProviderID = "gemini"
+
         state.autoGenerateNotes = false
         state.postProcessEnabled = true
         state.notesLanguage = "French"

@@ -28,6 +28,7 @@ fact. State uncertainty explicitly.
 | App lifecycle and user flows | `app/Sources/AppState/` (`AppState.swift` + `AppState+Recording`, `+Processing`, `+Providers`, `+Library`, `+Runtimes`) |
 | Settings and meeting UI | `app/Sources/SettingsView.swift`, `app/Sources/Library`, `app/Sources/MeetingDetailView.swift` |
 | Recording and audio capture | `Sources/MeetGistKit/Recorder.swift`, `SessionRecorder.swift`, `AudioTools.swift` |
+| Mic-track echo cancellation (pre-transcription preprocessing, P4b) | `Sources/MeetGistKit/EchoCancellation/` (`EchoPreprocess`, `MicEchoCanceller`, `EchoDelayEstimator`, `EchoAudioIO`, `TranscriptEchoDedup`, `AudioDeviceTransportHint`), `scripts/echo_report.py`. See `docs/mic-echo-fix-plan.md`. |
 | Meeting files and list actions | `Sources/MeetGistKit/MeetingStore.swift` |
 | Provider assembly and output contracts | `Pipeline.swift`, `Provider.swift`, `Prompts.swift`, `NotesTemplates.swift` |
 | Cloud providers | `GeminiClient.swift`, `OpenAIClient.swift`, `CodexCLINotes.swift` |
@@ -38,7 +39,8 @@ fact. State uncertainty explicitly.
 | Apple on-device notes | `AppleFoundationModelsNotes.swift` |
 | Subprocess supervision (cancel/timeout/kill, pipe draining) | `ChildProcess.swift` |
 | Post-process script | `app/Sources/Automation/PostProcessRunner.swift` |
-| Tests | `tests/MeetGistKitTests`, `tests/MeetGistAppTests` (both Swift Testing), `tests/test_*.py` (unittest) |
+| Live Meeting Copilot ("Live Assist", V1 + V2) — fully isolated live path, disabled by default | `Sources/MeetGistKit/LiveCopilot/` (`LiveAssistSession` orchestrator, `LiveAudioFeed`/`SpeechEndpointer`, `QwenLiveTranscriber` + `Resources/live_asr_worker.py`, `LiveASRRuntimeManager`, `CopilotLLM`/`CopilotLLMAdapters`, `LiveCopilotEngine`, `LiveMeetingState`, `LiveCopilotPersistence`; V2 — Suggest Answer/Ask Meet Gist/manual context — adds `LiveAssistAnswer.swift` (answer type, parser, post-check, assist.jsonl entry) and `ManualFileContextProvider.swift`, implementing the `LiveContextProvider` seam), `app/Sources/AppState/AppState+LiveAssist.swift` (V1 wiring + V2: `liveAutoSuggest`, `suggestAnswer()`/`askMeetGist()`/`pickLiveContextFile()`), `app/Sources/LiveAssist/` (panel UI incl. V2 sections, settings, labels). See `docs/live-copilot-plan.md`. |
+| Tests | `tests/MeetGistKitTests`, `tests/MeetGistAppTests` (both Swift Testing), `tests/test_*.py` (unittest); `tests/MeetGistKitTests/LiveCopilotBenchmarkTests.swift` is env-gated (`MEETGIST_LIVE_BENCH=1`) and excluded from `make test` |
 
 ## Architecture invariants
 
@@ -63,6 +65,20 @@ fact. State uncertainty explicitly.
   handlers must check the process generation token before touching state.
 - Spawn cancellable subprocesses through `ChildProcess`, never
   `waitUntilExit()` on undrained pipes.
+- Live Assist must never affect recording, transcription or notes. It is
+  disabled by default, requires a cloud provider (no on-device LLM), reads
+  PCM only through the optional taps described in FLOW-6, and every failure
+  in its path surfaces only through its own status — never `state`,
+  `lastError`, `recorder`, `processTask`, or `processGeneration`.
+- Mic-track echo cancellation (`EchoPreprocess.prepareMicTrack`) never
+  modifies canonical `mic.m4a`/`system.m4a`; it only ever produces a derived,
+  regenerable `<session>/transcription/mic.aec.wav`. A failure anywhere in
+  that step falls back to raw `mic.m4a` with a status note — it must never
+  fail transcription. `aec=<version>|off` is folded into
+  `cloudTranscriptionConfigID`/`offlineConfigID` so a toggle of the setting
+  never lets a checkpoint/part transcribed from the other mic audio be reused
+  as if it were the same job; with the setting off, both config IDs are
+  byte-identical to before this feature existed.
 
 ## Critical flows
 
@@ -76,6 +92,13 @@ fact. State uncertainty explicitly.
   provider, which writes the established notes outputs.
 - **FLOW-5 — Local Qwen setup/run:** the app installs the pinned runtime/model,
   runs a local MLX-LM worker, and stores its latest job metrics separately.
+- **FLOW-6 — Live Assist (optional, isolated):** while recording, if enabled,
+  optional PCM taps (`SystemAudioRecorder`'s live sink, a dedicated
+  `LiveMicTap`) feed `LiveAssistSession`, which runs its own endpointing,
+  a persistent local Qwen3-ASR worker, and a cloud `CopilotLLM` semantic pass
+  to publish a `LiveAssistSnapshot` to the Live Assist panel and
+  `<session>/live/`. It never touches `transcript.md`, `polished.md`,
+  `summary.md`, or the recording/notes state machine.
 
 ## Working protocol
 
@@ -117,6 +140,17 @@ retry/cancellation, and rollback behavior.
   report tests as passing unless they actually ran.
 - A clean build of the `MeetGistApp` target needs full Xcode: `KeyboardShortcuts`
   (all 2.x releases) uses `#Preview`, whose macro plugin ships only with Xcode.
+- `AVAudioConverter`'s pull-based `convert(to:error:withInputHandler:)` is
+  unreliable for a one-shot sample-rate conversion of a real file: it can
+  assert `outputBuffer.frameCapacity >= inputBuffer.frameLength` as an
+  uncaught Objective-C exception regardless of the actual up/downsampling
+  ratio, fail outright with OSStatus -50, or simply never report
+  `.endOfStream` once the input is exhausted (spinning forever with no new
+  output) — none of this reproduces on small synthetic buffers, only on a
+  real recording. `EchoAudioIO.decodeMono16k` (`Sources/MeetGistKit/EchoCancellation/`)
+  works around all three by not using `AVAudioConverter` for the rate change
+  at all: plain buffered `AVAudioFile.read(into:frameCount:)` at the file's
+  native rate, then its own linear-interpolation resample.
 - `docs/review-2026-09-26.md` is a point-in-time review; check its findings
   against the current code before acting on them.
 

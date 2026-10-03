@@ -11,8 +11,7 @@ packages:
   MeetGistKit:
     path: ..
   KeyboardShortcuts:
-    url: https://github.com/sindresorhus/KeyboardShortcuts
-    from: 2.2.0
+    path: ../Vendor/KeyboardShortcuts
 
 targets:
   MeetGist:

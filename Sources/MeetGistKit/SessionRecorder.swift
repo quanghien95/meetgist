@@ -82,6 +82,20 @@ public final class SessionRecorder: @unchecked Sendable {
     public func pause() { system.setPaused(true); mic.pause() }
     public func resume() { system.setPaused(false); mic.resume() }
 
+    /// Host time this recorder was constructed — the anchor Live Assist's
+    /// turn timestamps (`LiveTranscriptTurn.startedAt`/`endedAt`, every
+    /// `LiveTurnTimings` field) are relative to (plan §5.10). Same clock
+    /// (`DispatchTime`/mach-absolute-time nanoseconds) as every other host-ns
+    /// value in the live path.
+    public var recordingAnchorHostNs: UInt64 { recordCommandStartHostNs }
+
+    /// Pass-through to the system recorder's optional live PCM sink (plan
+    /// §5.10) — Live Assist's only hook into system-audio capture. `nil`
+    /// restores byte-for-byte identical recording behavior.
+    public func setLiveSystemSink(_ sink: (@Sendable (LivePCMChunk) -> Void)?) {
+        system.setLivePCMSink(sink)
+    }
+
     @discardableResult
     public func stop() async -> URL {
         stopRequestedHostNs = DispatchTime.now().uptimeNanoseconds

@@ -20,9 +20,9 @@ public extension MeetingProcessor {
     /// to inject a fake writer). Offline transcription remains independent;
     /// this stage reads only transcript.md.
     @discardableResult
-    public static func generateNotes(sessionDir: URL, writer: any NotesWriter,
-                                       providerName: String,
-                                       progress: @escaping @Sendable (String) -> Void) async throws
+    static func generateNotes(sessionDir: URL, writer: any NotesWriter,
+                              providerName: String,
+                              progress: @escaping @Sendable (String) -> Void) async throws
         -> (polished: String, summary: String) {
         let transcriptURL = sessionDir.appendingPathComponent("transcript.md")
         let transcript = try String(contentsOf: transcriptURL, encoding: .utf8)

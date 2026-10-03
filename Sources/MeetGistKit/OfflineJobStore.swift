@@ -10,11 +10,12 @@ public let qwenASREngine = "qwen3-asr"
 public let qwenASRModel = "mlx-community/Qwen3-ASR-1.7B-4bit"
 
 /// Namespaces cached transcription parts by engine+model so switching the
-/// offline provider can never reuse another engine's incompatible output —
-/// `isReusable` already checks `part.configID == state.configID`.
+/// offline provider can never reuse another engine's incompatible output.
 public func offlineConfigID(engine: String, model: String) -> String {
     let sanitizedModel = model.replacingOccurrences(of: "/", with: "-")
-    return "\(engine)-\(sanitizedModel)-v1"
+    // Qwen now uses short decoding windows and bounded generation. Old
+    // 300-second parts must not be reused under the new worker behavior.
+    return "\(engine)-\(sanitizedModel)-\(engine == qwenASREngine ? "v2" : "v1")"
 }
 
 public enum OfflineJobStatus: String, Codable, Sendable, Equatable {

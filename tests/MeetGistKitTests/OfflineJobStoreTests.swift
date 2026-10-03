@@ -4,6 +4,49 @@ import Foundation
 @testable import MeetGistKit
 
 @Suite struct OfflineJobStoreTests {
+    @Test func qwenDecodingRevisionDoesNotReuseOldParts() {
+        #expect(offlineConfigID(engine: qwenASREngine, model: qwenASRModel)
+                == "qwen3-asr-mlx-community-Qwen3-ASR-1.7B-4bit-v2")
+        #expect(offlineConfigID(engine: offlineEngine, model: offlineModel)
+                == "mlx-whisper-mlx-community-whisper-large-v3-mlx-v1")
+    }
+
+    @Test func legacyEchoConfigStillDecodesWithoutReencodingRemovedField() throws {
+        let config = OfflineJobConfig()
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(config)) as? [String: Any])
+        json["aec"] = "v1"
+        let decoded = try JSONDecoder().decode(OfflineJobConfig.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == config)
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any])
+        #expect(encoded["aec"] == nil)
+    }
+
+    @Test @MainActor func prepareReplacesEchoJobWithoutReusingItsPartsOrChangingTranscript() async throws {
+        let root = TestSupport.makeTempDirectoryURL("meetgist-remove-echo-cache")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = OfflineJobStore(sessionDir: root)
+        try FileManager.default.createDirectory(at: store.partsDir, withIntermediateDirectories: true)
+        var legacy = OfflineJobState(jobID: "legacy-echo-job", sessionID: root.lastPathComponent,
+                                     config: OfflineJobConfig(), tracks: ["mic": OfflineTrackState(durationSeconds: 30)])
+        legacy.configID += "-aecv1"
+        try store.save(legacy)
+        let part = OfflinePart(schemaVersion: 1, jobID: legacy.jobID, sessionID: legacy.sessionID,
+                               configID: legacy.configID, track: "mic", chunkIndex: 0,
+                               coreStartSeconds: 0, coreEndSeconds: 30, processingSeconds: 1,
+                               segments: [OfflineSegment(startSeconds: 0, endSeconds: 30, text: "old filtered audio")])
+        try JSONEncoder().encode(part).write(to: store.partsDir.appendingPathComponent("mic-0000.json"))
+        let transcript = root.appendingPathComponent("transcript.md")
+        let existingTranscript = Data("existing completed transcript".utf8)
+        try existingTranscript.write(to: transcript)
+
+        let coordinator = OfflineJobCoordinator(runtime: OfflineRuntimeManager(root: root.appendingPathComponent("runtime")))
+        let fresh = try await coordinator.prepare(sessionDir: root, config: OfflineJobConfig())
+        #expect(fresh.jobID != legacy.jobID)
+        #expect(fresh.configID == offlineConfigID(engine: offlineEngine, model: offlineModel))
+        #expect(!OfflineJobStore.isReusable(part, for: fresh, track: "mic", interval: (index: 0, start: 0, end: 30)))
+        #expect(try Data(contentsOf: transcript) == existingTranscript)
+    }
+
     @Test func recoveryRemovesTemporaryAndRebuildsProgressFromValidParts() throws {
         let root = TestSupport.makeTempDirectoryURL("meetgist-offline-store")
         defer { try? FileManager.default.removeItem(at: root) }

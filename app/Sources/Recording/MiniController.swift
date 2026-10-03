@@ -56,7 +56,7 @@ final class MiniController {
 private struct MiniControllerView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
-    @State private var collapsed = false
+    @CompatibleState private var collapsed = false
 
     var body: some View {
         VStack(spacing: 6) {

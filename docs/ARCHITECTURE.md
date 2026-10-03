@@ -99,6 +99,18 @@ A session folder is named `yyyy-MM-dd-HHmm[-title]` (POSIX locale, which
 earlier recording's audio is never reused or overwritten. If the microphone
 fails to start after system capture started, system capture is stopped again.
 
+### Importing audio and video
+
+The Library's **Import Audio or Video…** picker accepts audio and movie files
+supported by macOS AVFoundation, including MP4 and MOV. `AudioTools.export`
+extracts/transcodes only audio using the AppleM4A preset into a new meeting's
+`mic.m4a`; it never copies the original video into meeting storage. The source
+file remains unchanged. A video without an audio track is rejected. Failed or
+cancelled imports remove their newly created session folder and partial audio.
+Imports use the same cancellable task/generation guard as processing, so starting
+a recording cancels and awaits extraction before capture starts. Successful
+imports use the usual automatic transcription/notes settings.
+
 ### Cloud processing
 
 The existing `Pipeline`/`Provider` composition invokes the selected cloud
@@ -147,7 +159,21 @@ a single resumable job running the bundled worker (`offline_worker.py` /
 `offline_worker_qwen.py`). `OfflineJobStore` persists progress and committed
 parts; part IDs are namespaced by engine+model so switching engines never
 reuses incompatible output. Completion writes the regular transcript contract,
-after which the normal notes stage can run.
+after which the normal notes stage can run. Cloud and offline transcription
+read the canonical `mic.m4a` and `system.m4a` directly. Mic-track echo
+preprocessing and the cloud Whisper transcript echo deduplication were removed
+on 2026-10-03 because their behavior was unsatisfactory in use. Existing
+derived audio is ignored; checkpoints/parts with an AEC config suffix are
+not reused by new jobs. Completed transcripts remain unchanged until an
+explicit re-transcription. Live Assist retains its separate live turn filter.
+
+Qwen3-ASR uses 30-second, non-overlapping chunks. Its MLX decoder has a
+512-token output cap per chunk; repeated or implausibly long output is retried
+on successively shorter audio down to 7.5 seconds. If even that fails, the job
+fails instead of committing a hallucinated part. Qwen's part config ID is `v2`
+so old 300-second parts are not reused; existing completed transcripts are
+left in place until the user explicitly re-transcribes them. Whisper's chunk
+size and config ID are unchanged.
 
 Progress and completion are event-driven: the coordinator reloads job state
 when the worker atomically replaces `transcription/state.json` (a file-system
@@ -225,6 +251,155 @@ group, then SIGKILL after a 2 s grace period. The offline transcription worker
 is supervised by `OfflineJobCoordinator` with the same terminate-then-kill
 policy.
 
+## Live Copilot ("Live Assist", V1)
+
+An optional, fully isolated live path (`docs/live-copilot-plan.md`), disabled
+by default (`AppState.liveAssistEnabled`). It never feeds the canonical
+`transcript.md`/notes pipeline and never affects recording:
+
+```text
+SystemAudioRecorder's live PCM sink ─┐
+                                     ├─ LiveAudioFeed (per track: mono, 16kHz)
+LiveMicTap (AVAudioEngine, no VP) ───┘        │
+                                       SpeechEndpointer (energy VAD)
+                                               │  finalized SpeechSegment
+                                       RealtimeTranscriber
+                                       (QwenLiveTranscriber ↔ live_asr_worker.py,
+                                        persistent per-recording process)
+                                               │  LiveTranscriptTurn
+                                       LiveCopilotEngine (actor)
+                                         ├─ LiveTurnFilter (junk/dup/echo)
+                                         ├─ scheduler (≤1 in-flight, coalesced,
+                                         │   seq/generation-guarded, circuit breaker)
+                                         ├─ CopilotLLM (Gemini | OpenAI-compatible | Codex CLI)
+                                         └─ LiveMeetingState (dedup + evidence guards)
+                                               │  LiveAssistSnapshot
+                                       AppState+LiveAssist (@MainActor) → LiveAssistPanel
+```
+
+`LiveAssistSession` (Kit) is the single orchestrator wiring the above for one
+recording; `AppState+LiveAssist.swift` only starts/stops/pauses/resumes it
+and observes its snapshots — every dependency (transcriber, LLM, audio
+sources) is injected there via test seams
+(`liveTranscriberFactory`/`copilotLLMFactory`/`liveAudioSourceFactory`), so
+Live Assist is unit-testable without audio, Python, or network.
+
+The floating Live Assist panel opens at 640 × 720 points (bounded by the
+screen's available space) and can be resized using its native window edges
+or corners, down to 440 × 360 points. Its content wraps to the current width
+and scrolls vertically, while the header and Ask Meet Gist input stay visible.
+Transcript text is selectable and no longer truncated to two lines. Snapshot
+updates preserve the window size; hiding and showing the same panel retains
+its current size and position for the app session.
+
+The panel opens on a Transcript tab showing a chronological history of
+finalized, live-filter-accepted ASR turns, with a start–end timestamp relative
+to the recording anchor and a speaker/mic label for every utterance. Earlier
+text stays available as new turns arrive; it is selectable and scrollable,
+and new turns do not force the reader to jump to the bottom. The separate
+Live Assist tab retains the meaning, questions, notes and suggested answers.
+This reading history is kept in memory for the live session and survives
+status changes, provider changes and stopping that session. A new live
+session starts empty. It is independent of the short semantic context and
+the bounded Ask Meet Gist history; it never expands LLM prompts or writes
+to the canonical `transcript.md`.
+
+**Isolation.** `startLiveAssistIfEnabled` runs in its own `Task` after
+`rec.start()` has already succeeded; any error in that path only ever sets
+`liveAssist`'s own published state, never `state`/`lastError`/`recorder`/
+`processTask`/`processGeneration`. `stopLiveAssist()` runs at the very start
+of `stopRecording()` (and before offline/cloud processing begins, to free the
+live-ASR worker's memory) with a hard 2s cap, so a slow worker/subprocess
+teardown never delays saving the recording's audio. A local/on-device Notes
+provider is never silently reused for Live Assist — it requires an explicit
+cloud `CopilotLLM` (Gemini, an OpenAI-compatible chat provider, or Codex CLI);
+on-device providers are rejected with a clear message.
+
+**Privacy boundary.** Audio never leaves the machine for Live Assist: PCM
+goes only to the local `live_asr_worker.py` process via a private temp file
+deleted after use. Only transcribed text — the current turn(s), 2–3 recent
+turns, and a compact rolling meeting state — is sent to the selected cloud
+provider for the per-turn semantic pass; never raw audio, never the whole
+meeting's history. Codex CLI runs with `--sandbox read-only --ephemeral` in
+an empty temp directory, never the user's project files. Persistence under
+`<session>/live/` (`turns.jsonl`, `state.json`, `metrics.jsonl` +
+`metrics-summary.json`, `asr-worker.log`) is non-canonical: nothing reads it
+back for transcription or notes, and it is deleted along with the rest of the
+meeting folder like any other file in it (`MeetingStore.list`/`Exporter`
+never look inside it; delete is a plain `NSWorkspace.recycle` of the whole
+session directory).
+
+Realtime ASR (`LiveASRRuntimeManager`) is a separate app-managed runtime root
+from the one-shot offline Qwen3-ASR engine — same pinned `mlx-audio` stack,
+but a persistent process (loaded once per recording) instead of once per
+job, pinned to the 4-bit `Qwen3-ASR-0.6B` build by default for latency (the
+post-meeting offline/cloud pipeline is the accuracy backstop for the
+canonical transcript — see `docs/live-copilot-plan.md` §13 for the 4-bit vs
+8-bit measurements this decision is based on).
+
+### V2 — Live Assistant (Suggest Answer, Ask Meet Gist, manual context)
+
+Built on the exact same `LiveCopilotEngine`/`CopilotLLM`/persistence
+infrastructure as V1, with its own scheduling slot so it can never delay the
+V1 per-turn semantic loop:
+
+```text
+"Suggest Answer" press (questionID)  ──┐
+Ask Meet Gist text field (question)  ──┤
+                                        ▼
+                          LiveCopilotEngine.suggestAnswer/ask
+                            ├─ separate in-flight slot/seq/generation from V1
+                            │   (≤1 V2 request in flight; a new one cancels
+                            │    the old; V1's scheduler is untouched)
+                            ├─ bounded context:
+                            │    Suggest Answer: ≤8 recent turns + compact state
+                            │    Ask: last `askWindowMinutes` (10) of turns
+                            │         (≤8k chars) + compact state
+                            │    + optional ManualFileContextProvider snippet
+                            ├─ CopilotLLM (same provider selection as V1;
+                            │   Codex CLI answer/ask timeout 60s, HTTP 20s,
+                            │   reasoning effort "none" — same latency-first
+                            │   policy as V1's semantic calls)
+                            ├─ LiveAssistAnswerParser (tolerant JSON decode)
+                            ├─ LiveAssistAnswerPostCheck (an unsupported
+                            │   "known_from_meeting" claim — no token overlap
+                            │   with TURNS/STATE — moves to "assumptions")
+                            └─ LiveMetrics (suggest_pressed/ask_submitted →
+                                answer_visible, per provider)
+                                  │  LiveAssistSnapshot.v2* fields
+                          AppState+LiveAssist (liveAutoSuggest, context
+                          picker) → LiveAssistPanel (button, in-progress
+                          state, answer + "known"/"context"/"assumptions"
+                          lines, Ask field, context row)
+```
+
+- **`ManualFileContextProvider`** (plan §7.3) implements the `LiveContextProvider`
+  seam already reserved in V1: one `.md`/`.txt` file picked via `NSOpenPanel`
+  per meeting, read once, capped at ≈24k chars (a `truncated` flag surfaces a
+  UI note), kept in memory only — never written to disk, never sent with the
+  per-turn V1 semantic call. A future V3 retrieval provider can implement the
+  same `LiveContextProvider` protocol without touching `LiveCopilotEngine` or
+  the panel's call sites.
+- **Output contract** (`{answer, known_from_meeting, from_context,
+  assumptions, confidence}`) is shared by both flows and is OpenAI
+  strict-mode-safe the same way `semanticJSONSchema` is (a unit test —
+  `LiveCopilotSchemaStrictModeTests` — recursively validates every JSON
+  Schema this codebase ships against strict mode: `additionalProperties:
+  false` on every object, every property listed in `required`).
+- **`liveAutoSuggest`** (default **off**) makes `AppState` press "Suggest
+  Answer" automatically the moment a genuinely new question is detected
+  (tracked by question id, fires at most once per question) — purely a
+  convenience on top of the same manual `suggestAnswer(questionID:)` call the
+  panel's button makes.
+- **Persistence**: `<session>/live/assist.jsonl` gets one line per completed
+  V2 request — question, answer, provider, latency, confidence, and the
+  context file's **name only** (never its content); `LiveCopilotPersistence`
+  has no code path that can write file content there.
+
+V2 does not add embeddings, an index, or a vector DB — "context" is always
+exactly the one file the user picked, in full (bounded), never retrieved or
+ranked.
+
 ## Constraints and non-goals
 
 - Do not redesign the provider abstraction when adding a provider.
@@ -256,11 +431,29 @@ closure, local-runtime manager instances, `pipelineFactory`/
 domain, `~/Documents/meetgist`, Keychain, or Application Support. Real
 recording (`SessionRecorder`/ScreenCaptureKit) and OS permissions are not
 covered by any test and need manual verification. It adds the extra framework
-flags Swift Testing needs under the Command Line Tools. Caveat: a *clean* build of the
-`MeetGistApp` target needs full Xcode, because the `KeyboardShortcuts`
-dependency (every 2.x release) contains `#Preview` blocks whose
-`PreviewsMacros` plugin ships only with Xcode. There is no CI; run `make test`
-and `swift build` locally before pushing.
+flags Swift Testing needs under the Command Line Tools. A clean SwiftPM build of
+`MeetGistApp` works with macOS 27 Command Line Tools: the pinned local
+`Vendor/KeyboardShortcuts` copy omits preview-only macros, and app state uses
+the SDK's `SwiftUI.State` property wrapper through `CompatibleState`, avoiding
+the `SwiftUIMacros` host plugin missing from CLT. The signed `.app` build still
+requires full Xcode. There is no CI; run `make test`
+and `swift build` locally before pushing. Live Assist adds
+`tests/MeetGistKitTests/LiveAssistSessionTests.swift` (the orchestrator, with
+fake audio sources/transcriber/LLM) and
+`tests/MeetGistAppTests/AppStateLiveAssistTests.swift` (the isolation
+contract, plus V2 wiring: auto-suggest on/off, manual context forwarding,
+context cleared on a new recording) to the normal suite, plus an env-gated
+`tests/MeetGistKitTests/LiveCopilotBenchmarkTests.swift`
+(`MEETGIST_LIVE_BENCH=1`, real audio/model/network — never run by `make
+test` or CI) that produces the measurements in
+`docs/live-copilot-plan.md` §13. V2 adds its own V1-parity test coverage: V2
+scheduling/cancellation/staleness cases in
+`tests/MeetGistKitTests/LiveCopilotEngineTests.swift`, and dedicated suites
+in `tests/MeetGistKitTests/LiveCopilotV2Tests.swift` (prompt builder, answer
+parser, post-check, `ManualFileContextProvider`) and
+`LiveCopilotSchemaStrictModeTests` (a generic OpenAI-strict-mode validator
+run against every JSON Schema this codebase ships, `semanticJSONSchema` and
+`answerJSONSchema` alike — the exact class of bug P4 found by hand).
 
 ## Related documents
 

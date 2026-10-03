@@ -15,8 +15,13 @@ extension AppState {
 
     func pauseResume() {
         guard let rec = recorder else { return }
-        if state == .recording { rec.pause(); pauseStart = Date(); state = .paused; status = tr(L.paused) }
-        else if state == .paused { rec.resume(); if let p = pauseStart { pausedAccum += Date().timeIntervalSince(p) }; pauseStart = nil; state = .recording; status = tr(L.statusRecording) }
+        if state == .recording {
+            rec.pause(); pauseStart = Date(); state = .paused; status = tr(L.paused)
+            forwardPauseToLiveAssist(paused: true)
+        } else if state == .paused {
+            rec.resume(); if let p = pauseStart { pausedAccum += Date().timeIntervalSince(p) }; pauseStart = nil; state = .recording; status = tr(L.statusRecording)
+            forwardPauseToLiveAssist(paused: false)
+        }
     }
 
     private func startRecording() async {
@@ -54,6 +59,9 @@ extension AppState {
             state = .recording; status = tr(L.statusRecording); lastError = nil
             startTicker()
             hud?(HUDEvent(kind: .recording, text: "REC"))
+            // Own path, own failures (plan §5.11): never touches `state`/
+            // `lastError`/`recorder` — any problem only sets `liveAssist`.
+            startLiveAssistIfEnabled(recorder: rec, sessionDir: rec.sessionDir)
         } catch {
             // A half-started recorder (e.g. system audio started, mic failed —
             // SessionRecorder.start() already stops system in that case) must
@@ -66,6 +74,10 @@ extension AppState {
 
     private func stopRecording() async {
         guard let rec = recorder else { return }
+        // Live Assist stops first (hard 2s cap) — frees the live-ASR
+        // worker's memory before the offline/cloud pipeline needs it, and
+        // never delays saving the recording's audio (plan §5.11).
+        await stopLiveAssist()
         stopTicker()
         status = tr(L.statusFinishing)
         let dir = await rec.stop()
@@ -76,16 +88,18 @@ extension AppState {
     }
 
     /// Shared "what happens after a new session's audio exists on disk" path,
-    /// used by both recording (`stopRecording`) and audio import
-    /// (`AppState+Library.swift`'s `importAudio`): kicks off auto-transcription
+    /// used by both recording (`stopRecording`) and audio/video import
+    /// (`AppState+Library.swift`'s `importMedia`): kicks off auto-transcription
     /// per the user's settings, or reports why it didn't. `internal` (not
-    /// `private`): called cross-file from `importAudio`.
+    /// `private`): called cross-file from `importMedia`.
     func finishNewSession(_ dir: URL, savedMessage: String) async {
+        let generation = processGeneration
         if usesOfflineTranscription {
             if autoTranscribe {
                 if activeOfflineRuntime.state == .ready { process(dir) }
                 else {
                     await activeOfflineCoordinator.markSetupRequired(sessionDir: dir, config: offlineConfig)
+                    guard processGeneration == generation, !Task.isCancelled else { return }
                     state = .idle; status = "\(savedMessage). \(tr(L.installLocalEngineSuffix))"
                 }
             } else { state = .idle; status = "\(savedMessage)." }

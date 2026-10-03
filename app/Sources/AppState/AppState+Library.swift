@@ -53,13 +53,12 @@ extension AppState {
     }
 
     // MARK: Import
-    static let importableAudioTypes: [UTType] = [.mp3, .wav, .aiff, .mpeg4Audio, .audio]
-        .compactMap { $0 } + [UTType(filenameExtension: "flac")].compactMap { $0 }
+    static let importableMediaTypes: [UTType] = [.audio, .movie]
+        + [UTType(filenameExtension: "flac")].compactMap { $0 }
 
-    /// Opens a file picker for an existing audio recording and imports it as a
-    /// new meeting, transcoding it into a fresh session folder so it behaves
-    /// exactly like a recorded meeting from then on (transcribe, notes, rename…).
-    func importAudio() {
+    /// Imports audio or the audio track of a video as a new meeting. Only the
+    /// extracted m4a is stored; the source media stays in its original location.
+    func importMedia() {
         guard recorder == nil else {
             status = tr(L.stopRecordingBeforeImport)
             return
@@ -72,15 +71,16 @@ extension AppState {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = Self.importableAudioTypes
+        panel.allowedContentTypes = Self.importableMediaTypes
+        panel.message = tr(L.importMediaDescription)
         guard panel.runModal() == .OK, let source = panel.url else { return }
-        importAudio(from: source)
+        importMedia(from: source)
     }
 
     /// Imports `source` as a new meeting (the file-picker-free half of
-    /// `importAudio()`). The folder name is unique even for two imports in
+    /// `importMedia()`). The folder name is unique even for two imports in
     /// the same second, so an earlier import's audio is never overwritten.
-    func importAudio(from source: URL) {
+    func importMedia(from source: URL) {
         guard recorder == nil else {
             status = tr(L.stopRecordingBeforeImport)
             return
@@ -90,24 +90,41 @@ extension AppState {
             return
         }
         let dir = outputDir
-        state = .processing; status = tr(L.importingMessage)
-        Task { [weak self] in
+        processTask?.cancel()
+        let generation = nextProcessGeneration()
+        state = .processing; status = tr(L.importingMessage); lastError = nil
+        processTask = Task { [weak self] in
             guard let self else { return }
+            var pendingSession: URL?
+            // Do not leave an empty meeting or a partial audio export after a
+            // failed/cancelled import. Only this task's newly created folder is removed.
+            defer {
+                if let pendingSession { try? FileManager.default.removeItem(at: pendingSession) }
+            }
             do {
+                try Task.checkCancellation()
                 let sessionDir = try SessionRecorder.makeSessionDir(
                     outputDir: dir, base: "imported-\(Self.importFolderStamp())")
+                pendingSession = sessionDir
                 try await AudioTools.export(source, to: sessionDir.appendingPathComponent("mic.m4a"))
+                try Task.checkCancellation()
+                guard self.processGeneration == generation else { return }
                 // The folder name ends in a unix timestamp, which would otherwise
                 // be shown as the title; the source file's name is more useful.
                 try? MeetingStore.setTitle(source.deletingPathExtension().lastPathComponent,
                                            forSessionDir: sessionDir)
+                pendingSession = nil
                 self.refresh(); self.selectedID = sessionDir.lastPathComponent
                 // The import itself is done; leave `.processing` before handing
                 // off, or processOffline's "already processing" guard rejects
                 // the auto-transcription and the app stays stuck in processing.
                 self.state = .idle
                 await self.finishNewSession(sessionDir, savedMessage: self.tr(L.importedMessage))
+            } catch is CancellationError {
+                guard self.processGeneration == generation else { return }
+                self.state = .idle; self.status = self.tr(L.canceledMessage)
             } catch {
+                guard self.processGeneration == generation else { return }
                 self.state = .error; self.lastError = error.localizedDescription
                 self.status = self.tr(L.importFailedMessage)
             }

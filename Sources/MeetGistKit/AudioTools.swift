@@ -37,10 +37,24 @@ public enum AudioTools {
         }
     }
 
-    /// Transcode an arbitrary audio file (mp3, wav, aiff, flac, m4a, …) to m4a
-    /// at `destination`, for importing recordings made outside the app.
+    public enum ImportError: LocalizedError {
+        case noAudioTrack
+
+        public var errorDescription: String? {
+            "The selected file has no audio track. Choose an audio file or a video with sound."
+        }
+    }
+
+    /// Transcode audio from an audio or video file to m4a at `destination`.
+    /// AppleM4A exports audio only, without copying or retaining video data.
     public static func export(_ source: URL, to destination: URL) async throws {
+        try Task.checkCancellation()
         let asset = AVURLAsset(url: source)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        guard !audioTracks.isEmpty else {
+            throw ImportError.noAudioTrack
+        }
+        try Task.checkCancellation()
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
             throw NSError(domain: "meetgist.audio", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "export session failed"])
@@ -48,7 +62,12 @@ public enum AudioTools {
         try? FileManager.default.removeItem(at: destination)
         export.outputURL = destination
         export.outputFileType = .m4a
-        try await export.exportAsync()
+        do {
+            try await export.exportAsync()
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
     }
 
     public struct Chunk: Sendable {
@@ -93,16 +112,46 @@ public enum AudioTools {
 }
 
 extension AVAssetExportSession {
-    /// macOS 14-compatible async wrapper around exportAsynchronously. The
-    /// continuation closure captures only `cont` (Sendable); status/error are read
-    /// after it resumes, so `self` isn't captured across the boundary.
+    /// macOS 14-compatible, cancellable wrapper around exportAsynchronously.
+    /// Status/error are read after the export's completion callback resumes.
     func exportAsync() async throws {
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            exportAsynchronously { cont.resume() }
+        let operation = CancellableAssetExport(self)
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                operation.start { cont.resume() }
+            }
+        } onCancel: {
+            operation.cancel()
         }
+        try Task.checkCancellation()
         if status != .completed {
             throw error ?? NSError(domain: "meetgist.audio", code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "export status \(status.rawValue)"])
         }
+    }
+}
+
+/// Serializes start/cancel so cancellation before the continuation is installed
+/// cannot start an export afterwards. AVFoundation completes an active export's
+/// callback when cancelExport() is called, allowing recording to await cleanup.
+private final class CancellableAssetExport: @unchecked Sendable {
+    private let export: AVAssetExportSession
+    private let lock = NSLock()
+    private var cancelled = false
+
+    init(_ export: AVAssetExportSession) { self.export = export }
+
+    func start(completion: @escaping @Sendable () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled else { completion(); return }
+        export.exportAsynchronously(completionHandler: completion)
+    }
+
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelled = true
+        export.cancelExport()
     }
 }

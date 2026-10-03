@@ -43,6 +43,11 @@ struct MenuBarPopover: View {
                 Spacer()
             }
 
+            Toggle(loc.t(L.liveAssist), isOn: Binding(
+                get: { state.liveAssistEnabled },
+                set: { _ in state.toggleLiveAssist() }
+            )).tint(Theme.controlTint).font(Theme.ui(12))
+
             Divider().overlay(Theme.line)
 
             VStack(spacing: 1) {
@@ -75,7 +80,7 @@ struct MenuBarPopover: View {
 private struct MenuRowLabel: View {
     let title: String
     let symbol: String
-    @State private var hovering = false
+    @CompatibleState private var hovering = false
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {

@@ -29,7 +29,7 @@ struct StatusPill: View {
     let color: Color
     let text: String
     var pulse = false
-    @State private var on = false
+    @CompatibleState private var on = false
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 7, height: 7)

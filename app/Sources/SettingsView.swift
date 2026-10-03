@@ -90,6 +90,8 @@ struct SettingsView: View {
                         }
                     }
 
+                    LiveAssistSettings().environmentObject(state).environmentObject(loc)
+
                     GroupBox(loc.t(L.notesLanguageSection)) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
@@ -156,8 +158,8 @@ struct ProviderSlot: View {
     let providers: [Provider]
     @Binding var selection: String
     let slot: ProviderModelSlot
-    @State private var keyInput = ""
-    @State private var modelInput = ""
+    @CompatibleState private var keyInput = ""
+    @CompatibleState private var modelInput = ""
 
     private var selected: Provider { providers.first { $0.id == selection } ?? providers.first ?? ProviderCatalog.builtIn[0] }
     private var defaultModel: String { slot == .transcribe ? (selected.transcribeModel ?? "") : (selected.notesModel ?? "") }
@@ -405,7 +407,7 @@ struct AppleOnDeviceProviderSettings: View {
 struct QwenLocalNotesProviderSettings: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
-    @State private var showLastRunMetrics = false
+    @CompatibleState private var showLastRunMetrics = false
 
     private var metricsURL: URL {
         state.localNotesRuntime.root.appendingPathComponent("last-run-metrics.json")
@@ -566,10 +568,10 @@ struct CustomProviderRow: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var loc: Localization
     let initial: Provider
-    @State private var name = ""
-    @State private var baseURL = ""
-    @State private var model = ""
-    @State private var keyInput = ""
+    @CompatibleState private var name = ""
+    @CompatibleState private var baseURL = ""
+    @CompatibleState private var model = ""
+    @CompatibleState private var keyInput = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -604,8 +606,8 @@ struct CustomProviderRow: View {
 
 struct AudioSettings: View {
     @EnvironmentObject var loc: Localization
-    @State private var micOK = false
-    @State private var screenOK = false
+    @CompatibleState private var micOK = false
+    @CompatibleState private var screenOK = false
 
     var body: some View {
         GroupBox(loc.t(L.audio)) {
@@ -640,7 +642,7 @@ struct AudioSettings: View {
 
 struct LaunchAtLoginToggle: View {
     @EnvironmentObject var loc: Localization
-    @State private var on = false
+    @CompatibleState private var on = false
     var body: some View {
         Toggle(loc.t(L.launchAtLogin), isOn: $on)
             .onAppear { on = (SMAppService.mainApp.status == .enabled) }
