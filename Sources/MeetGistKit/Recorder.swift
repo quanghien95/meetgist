@@ -215,25 +215,38 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
 
     /// Compute a peak level from the PCM buffer (ScreenCaptureKit delivers Float32).
     private func updateSystemPeak(_ sb: CMSampleBuffer) {
+        if let peak = Self.systemPeakDBFS(from: sb) { lastSystemPeakDb = peak }
+    }
+
+    /// Meter every channel before downmixing (opposite-phase stereo must
+    /// still show activity). Allocate enough space for planar stereo.
+    static func systemPeakDBFS(from sb: CMSampleBuffer) -> Float? {
         guard let fmt = CMSampleBufferGetFormatDescription(sb),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt)?.pointee,
-              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 else { return }
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 else { return nil }
+        let storage = AudioBufferList.allocate(maximumBuffers: max(1, Int(asbd.mChannelsPerFrame)))
+        defer { free(storage.unsafeMutablePointer) }
         var bb: CMBlockBuffer?
-        var abl = AudioBufferList()
-        let st = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sb, bufferListSizeNeededOut: nil, bufferListOut: &abl,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
+        var size = 0
+        let queryStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sb, bufferListSizeNeededOut: &size, bufferListOut: nil, bufferListSize: 0,
             blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: nil)
+        guard queryStatus == noErr, size > 0 else { return nil }
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sb, bufferListSizeNeededOut: nil, bufferListOut: storage.unsafeMutablePointer,
+            bufferListSize: size, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil,
             flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &bb)
-        guard st == noErr else { return }
+        guard status == noErr else { return nil }
         var peak: Float = 0
-        for buf in UnsafeMutableAudioBufferListPointer(&abl) {
+        for buf in UnsafeMutableAudioBufferListPointer(storage.unsafeMutablePointer) {
             guard let data = buf.mData else { continue }
-            let n = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
-            let p = data.assumingMemoryBound(to: Float.self)
-            for i in 0..<n { peak = max(peak, abs(p[i])) }
+            let samples = data.assumingMemoryBound(to: Float.self)
+            for i in 0..<(Int(buf.mDataByteSize) / MemoryLayout<Float>.size) {
+                peak = max(peak, abs(samples[i]))
+            }
         }
-        lastSystemPeakDb = peak > 0 ? 20 * log10(peak) : -160
+        return peak > 0 ? 20 * log10(peak) : -160
     }
 
     /// Copies the Float32 PCM out of `sb` for Live Assist's tap (review
@@ -265,12 +278,6 @@ public final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelega
     /// site above) — with no sink, `stream(_:didOutputSampleBuffer:)`'s
     /// behavior is untouched, byte for byte.
     ///
-    /// Deliberately **not** changed: `updateSystemPeak` above uses the same
-    /// single-buffer pattern this function used to use, and is suspected of
-    /// the same non-interleaved bug (the live system-level meter may read
-    /// silence) — see docs/live-copilot-plan.md §11 for that follow-up; it's
-    /// out of scope here per the "minimal Recorder.swift change" instruction
-    /// and isn't part of the Live Assist PCM path this fixes.
     static func pcmChunk(from sb: CMSampleBuffer, hostTimeNs: UInt64) -> LivePCMChunk? {
         guard let fmt = CMSampleBufferGetFormatDescription(sb),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmt)?.pointee,

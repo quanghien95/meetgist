@@ -101,6 +101,7 @@ public actor LiveCopilotEngine {
     private var consecutiveFailures = 0
     private var circuitOpenUntil: Date?
     private var status: LiveAssistSnapshot.Status = .idle
+    private var micCaptureError: String?
     private var latestTurn: LiveTranscriptTurn?
     /// UI-only history for this live session; never used as LLM context.
     private var transcriptTurns: [LiveTranscriptTurn] = []
@@ -152,8 +153,10 @@ public actor LiveCopilotEngine {
     }
 
     public func currentSnapshot() -> LiveAssistSnapshot {
-        LiveAssistSnapshot.from(state, status: status, latestTurn: latestTurn,
-                                transcriptTurns: transcriptTurns, v2: v2State)
+        var snapshot = LiveAssistSnapshot.from(state, status: status, latestTurn: latestTurn,
+                                                transcriptTurns: transcriptTurns, v2: v2State)
+        snapshot.micCaptureError = micCaptureError
+        return snapshot
     }
 
     public func currentState() -> LiveMeetingState { state }
@@ -167,6 +170,11 @@ public actor LiveCopilotEngine {
     /// or scheduler tick naturally supersedes this once turns flow again.
     public func setTranscriptionStatus(_ status: LiveAssistSnapshot.Status) {
         updateStatus(status)
+    }
+
+    public func setMicCaptureError(_ message: String?) {
+        micCaptureError = message
+        broadcast(currentSnapshot())
     }
 
     /// Records when the app actually rendered the snapshot reflecting
@@ -216,10 +224,23 @@ public actor LiveCopilotEngine {
     /// `status` instead (plan §5.14).
     public func ingest(_ turn: LiveTranscriptTurn) {
         let recentSameTrack = state.recentTurns.filter { $0.track == turn.track }
-        let recentOtherTrack = state.recentTurns.filter { $0.track != turn.track }
+        // Echo matching uses speech timestamps, not the short LLM context ring:
+        // a long speaker segment may arrive after several shorter mic turns.
+        let recentOtherTrack = transcriptTurns.filter { $0.track != turn.track }
         if filter.shouldDrop(turn, recentSameTrack: recentSameTrack, recentOtherTrack: recentOtherTrack) {
             metrics.recordSkipped(turnID: turn.id, track: turn.track, reason: "filtered")
             return
+        }
+
+        let echoes = turn.track == .speaker
+            ? transcriptTurns.filter { filter.isMicEcho($0, of: turn) } : []
+        let echoIDs = Set(echoes.map(\.id))
+        if !echoIDs.isEmpty {
+            transcriptTurns.removeAll { echoIDs.contains($0.id) }
+            state.recentTurns.removeAll { echoIDs.contains($0.id) }
+            askTurnHistory.removeAll { echoIDs.contains($0.id) }
+            pendingBatch.removeAll { echoIDs.contains($0.id) }
+            for echo in echoes { metrics.recordSkipped(turnID: echo.id, track: .me, reason: "mic_echo_reconciled") }
         }
 
         persistence?.appendTurn(turn)
@@ -237,6 +258,7 @@ public actor LiveCopilotEngine {
         } else {
             transcriptTurns.append(turn)
         }
+        if !echoIDs.isEmpty { persistence?.replaceTurns(transcriptTurns) }
         askTurnHistory.append(turn)
         if askTurnHistory.count > maxAskTurnHistory { askTurnHistory.removeFirst(askTurnHistory.count - maxAskTurnHistory) }
         persistence?.writeState(state)

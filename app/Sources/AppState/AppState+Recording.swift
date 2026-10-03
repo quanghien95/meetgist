@@ -16,7 +16,7 @@ extension AppState {
     func pauseResume() {
         guard let rec = recorder else { return }
         if state == .recording {
-            rec.pause(); pauseStart = Date(); state = .paused; status = tr(L.paused)
+            rec.pause(); meters.micLevel = 0; meters.systemLevel = 0; pauseStart = Date(); state = .paused; status = tr(L.paused)
             forwardPauseToLiveAssist(paused: true)
         } else if state == .paused {
             rec.resume(); if let p = pauseStart { pausedAccum += Date().timeIntervalSince(p) }; pauseStart = nil; state = .recording; status = tr(L.statusRecording)
@@ -117,7 +117,7 @@ extension AppState {
             if self.state == .recording {
                 self.meters.elapsed = Date().timeIntervalSince(start) - self.pausedAccum
                 self.meters.micLevel = Self.norm(self.recorder?.micLevel() ?? -160)
-                Task { if let r = self.recorder { let s = await r.systemLevel(); self.meters.systemLevel = Self.norm(s) } }
+                Task { if let r = self.recorder { let s = await r.systemLevel(); if self.state == .recording { self.meters.systemLevel = Self.norm(s) } } }
             }
         }
     }

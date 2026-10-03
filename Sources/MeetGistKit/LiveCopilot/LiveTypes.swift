@@ -96,8 +96,14 @@ public protocol RealtimeTranscriber: Sendable {
     /// `transcribe` must not be called before this completes.
     func prepare() async throws
     func transcribe(_ segment: SpeechSegment) async throws -> String
+    func setLanguage(_ language: String) async
     /// Terminates any owned subprocess. Safe to call more than once.
     func shutdown() async
+}
+
+public extension RealtimeTranscriber {
+    /// Optional for fixed-language transcribers; the production Qwen worker supports it.
+    func setLanguage(_ language: String) async {}
 }
 
 // MARK: - Future extension seam (plan §12 — do NOT implement V3/V4 logic now)

@@ -142,6 +142,7 @@ struct LibraryView: View {
             Button(loc.t(L.moveToTrash), role: .destructive) {
                 if let meetingToDelete { state.moveMeetingToTrash(meetingToDelete) }
             }
+            .keyboardShortcut(.defaultAction)
             Button(loc.t(L.cancel), role: .cancel) { }
         } message: {
             Text(loc.t(L.deleteMeetingWarning))

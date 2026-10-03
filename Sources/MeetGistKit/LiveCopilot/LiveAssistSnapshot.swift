@@ -38,6 +38,9 @@ public struct LiveAssistSnapshot: Sendable, Equatable {
         case liveASRNotInstalled
     }
 
+    /// Mic startup failure, independent of cloud/ASR status. System-only
+    /// transcription continues; the UI must make the missing Me track clear.
+    public var micCaptureError: String?
     public var status: Status
     public var topic: String
     public var lastMeaning: String?
@@ -74,7 +77,7 @@ public struct LiveAssistSnapshot: Sendable, Equatable {
     /// Answer's result lives only in `v2Answer`, not in this history.
     public var v2AskHistory: [LiveAssistQAEntry]
 
-    public init(status: Status = .idle, topic: String = "", lastMeaning: String? = nil,
+    public init(status: Status = .idle, micCaptureError: String? = nil, topic: String = "", lastMeaning: String? = nil,
                 lastQuestionID: String? = nil, lastQuestion: String? = nil,
                 keyPoints: [String] = [], decisions: [String] = [],
                 actionItems: [LiveAssistActionItemView] = [], openQuestionCount: Int = 0,
@@ -82,6 +85,7 @@ public struct LiveAssistSnapshot: Sendable, Equatable {
                 v2AnswerInFlight: Bool = false, v2Kind: LiveAssistV2Kind? = nil, v2Question: String? = nil,
                 v2Answer: LiveAssistAnswer? = nil, v2Error: String? = nil,
                 v2AskHistory: [LiveAssistQAEntry] = []) {
+        self.micCaptureError = micCaptureError
         self.status = status
         self.topic = topic
         self.lastMeaning = lastMeaning

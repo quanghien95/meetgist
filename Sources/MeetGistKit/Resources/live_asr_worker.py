@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 SAMPLE_RATE = 16_000
+MAX_GENERATION_TOKENS = 512
 
 
 class _Qwen3ASRTranscriber:
@@ -53,7 +54,10 @@ class _Qwen3ASRTranscriber:
             language=language,
             hotwords=hotwords if hotwords else None,
             verbose=False,
+            max_tokens=MAX_GENERATION_TOKENS,
         )
+        if getattr(result, "generation_tokens", 0) >= MAX_GENERATION_TOKENS:
+            raise RuntimeError("Live ASR exceeded its generation budget; result discarded")
         return (result.text or "").strip()
 
 
@@ -143,7 +147,10 @@ def run_worker(
         if message_type == "shutdown":
             break
         if message_type == "transcribe":
-            handle_transcribe(stdout, transcriber, message, language=language, hotwords=hotwords,
+            request_language = message.get("language", language)
+            if not request_language or request_language == "auto":
+                request_language = None
+            handle_transcribe(stdout, transcriber, message, language=request_language, hotwords=hotwords,
                               read_pcm=read_pcm, clock=clock)
         # Unknown message types are ignored rather than treated as fatal, so
         # a future protocol addition doesn't require a lockstep worker bump.

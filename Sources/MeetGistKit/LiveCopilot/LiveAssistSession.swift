@@ -81,6 +81,7 @@ public actor LiveAssistSession {
     private var nextTurnID = 0
     private var isRunning = false
     private var isPaused = false
+    private var audioGeneration = 0
     private var asrFailed = false
     private var asrRestartAttempted = false
 
@@ -111,6 +112,8 @@ public actor LiveAssistSession {
 
     /// Swaps the semantic LLM (e.g. the user changed the Live Assist
     /// provider mid-recording) without restarting audio/ASR.
+    public func setLanguage(_ language: String) async { await transcriber.setLanguage(language) }
+
     public func setLLM(_ llm: (any CopilotLLM)?) async {
         await engine.setLLM(llm)
     }
@@ -192,12 +195,14 @@ public actor LiveAssistSession {
                                   channels: chunk.channels, hostTimeNs: chunk.hostTimeNs)
             }
             micFeed = newMicFeed
+            await engine.setMicCaptureError(nil)
             frameLoopTasks.append(Task { [weak self] in await self?.runFrameLoop(track: .me, stream: micStream) })
         } catch {
             // Plan §5.14: mic tap failure → Speaker-only live mode.
             micFeed = nil
             micContinuation.finish()
             frameContinuations[.me] = nil
+            await engine.setMicCaptureError(error.localizedDescription)
         }
     }
 
@@ -239,6 +244,8 @@ public actor LiveAssistSession {
     /// finalized/discarded (plan §5.1) rather than spanning the pause gap.
     public func pause() async {
         isPaused = true
+        audioGeneration += 1
+        pendingSegments.removeAll()
         _ = speakerEndpointer.flush()
         _ = micEndpointer.flush()
         speakerFeed?.reset()
@@ -246,6 +253,8 @@ public actor LiveAssistSession {
     }
 
     public func resume() async {
+        speakerFeed?.reset()
+        micFeed?.reset()
         isPaused = false
     }
 
@@ -309,6 +318,7 @@ public actor LiveAssistSession {
     }
 
     private func transcribeAndIngest(_ segment: SpeechSegment) async {
+        let generation = audioGeneration
         let turnID = nextTurnID
         nextTurnID += 1
         let speechEndHostNs = recordingAnchorHostNs &+ UInt64(max(0, segment.endedAt) * 1_000_000_000)
@@ -320,7 +330,7 @@ public actor LiveAssistSession {
             // an actor call resumes seeing every mutation made meanwhile, so
             // this re-check is enough to guarantee a stopped session never
             // publishes a turn afterward (plan §5.14/§8).
-            guard isRunning else { return }
+            guard isRunning, !isPaused, generation == audioGeneration else { return }
             timings.asrEndHostNs = DispatchTime.now().uptimeNanoseconds
             if asrFailed {
                 asrFailed = false
@@ -330,7 +340,7 @@ public actor LiveAssistSession {
                                          endedAt: segment.endedAt, text: text, timings: timings)
             await engine.ingest(turn)
         } catch {
-            guard isRunning else { return }
+            guard isRunning, !isPaused, generation == audioGeneration else { return }
             await handleTranscriptionFailure(error)
         }
     }

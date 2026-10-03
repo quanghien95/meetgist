@@ -11,6 +11,36 @@ import Foundation
         return [Float](repeating: amplitude, count: config.frameSamples)
     }
 
+    @Test func defaultContinuousSpeechPublishesWithinTwentySeconds() {
+        let config = LiveEndpointerConfig()
+        var endpointer = SpeechEndpointer(track: .speaker, config: config)
+        var first: SpeechSegment?
+        for index in 0..<Int(21 / config.frameSeconds) {
+            if let segment = endpointer.process(frame: Self.frame(config, loud: true), atSeconds: Double(index) * config.frameSeconds) {
+                first = segment
+                break
+            }
+        }
+        #expect(first != nil)
+        #expect((first?.endedAt ?? 100) <= 20 + config.frameSeconds)
+        #expect((first?.durationSeconds ?? 100) >= 19.8)
+    }
+
+    @Test func defaultKeepsSixHundredMillisecondClausePauseWithinOneTurn() {
+        let config = LiveEndpointerConfig()
+        var endpointer = SpeechEndpointer(track: .speaker, config: config)
+        var segments: [SpeechSegment] = []
+        var time = 0.0
+        for (seconds, loud) in [(1.0, true), (0.6, false), (1.0, true), (1.0, false)] {
+            for _ in 0..<Int(seconds / config.frameSeconds) {
+                if let segment = endpointer.process(frame: Self.frame(config, loud: loud), atSeconds: time) { segments.append(segment) }
+                time += config.frameSeconds
+            }
+        }
+        #expect(segments.count == 1)
+        #expect((segments.first?.durationSeconds ?? 0) > 2.4)
+    }
+
     @Test func continuousSpeechThenSilenceFinalizesOneTurn() {
         let config = LiveEndpointerConfig()
         var endpointer = SpeechEndpointer(track: .speaker, config: config)

@@ -101,9 +101,13 @@ final class AppState: ObservableObject {
     // throw anywhere in this path only ever touches `liveAssist` below, never
     // `state`/`lastError`/`recorder`/`processTask`/`processGeneration`.
     @Published var liveAssistEnabled: Bool { didSet { defaults.set(liveAssistEnabled, forKey: Keys.liveAssistEnabled) } }
+    @Published var liveAssistAlwaysOnTop: Bool { didSet { defaults.set(liveAssistAlwaysOnTop, forKey: Keys.liveAssistAlwaysOnTop) } }
     /// Empty means "use the Notes provider, if it's a cloud provider".
     @Published var liveAssistProviderID: String {
         didSet { defaults.set(liveAssistProviderID, forKey: Keys.liveAssistProvider); liveAssistProviderDidChange() }
+    }
+    @Published var liveTranscriptionLanguage: String {
+        didSet { defaults.set(liveTranscriptionLanguage, forKey: Keys.liveTranscriptionLanguage); liveTranscriptionLanguageDidChange() }
     }
     @Published var liveAnalyzeMic: Bool { didSet { defaults.set(liveAnalyzeMic, forKey: Keys.liveAnalyzeMic) } }
     /// V2 (plan §7.1): automatically press "Suggest Answer" the moment a new
@@ -249,7 +253,9 @@ final class AppState: ObservableObject {
         static let detectMeetings = "MeetGistDetectMeetings", postProcessEnabled = "MeetGistPostProcessEnabled", postProcessSource = "MeetGistPostProcessSource"
         static let autoGenerateNotes = "MeetGistAutoGenerateNotes"
         static let liveAssistEnabled = "MeetGistLiveAssistEnabled"
+        static let liveAssistAlwaysOnTop = "MeetGistLiveAssistAlwaysOnTop"
         static let liveAssistProvider = "MeetGistLiveAssistProvider"
+        static let liveTranscriptionLanguage = "MeetGistLiveTranscriptionLanguage"
         static let liveAnalyzeMic = "MeetGistLiveAnalyzeMic"
         static let liveAutoSuggest = "MeetGistLiveAutoSuggest"
 
@@ -318,7 +324,9 @@ final class AppState: ObservableObject {
         offlineLanguage = d.string(forKey: Keys.offlineLanguage) ?? "auto"
         offlineVocabulary = d.string(forKey: Keys.offlineVocabulary) ?? HotwordPresets.defaultKeywords
         liveAssistEnabled = (d.object(forKey: Keys.liveAssistEnabled) as? Bool) ?? false
+        liveAssistAlwaysOnTop = (d.object(forKey: Keys.liveAssistAlwaysOnTop) as? Bool) ?? false
         liveAssistProviderID = d.string(forKey: Keys.liveAssistProvider) ?? ""
+        liveTranscriptionLanguage = d.string(forKey: Keys.liveTranscriptionLanguage) ?? "en"
         liveAnalyzeMic = (d.object(forKey: Keys.liveAnalyzeMic) as? Bool) ?? false
         liveAutoSuggest = (d.object(forKey: Keys.liveAutoSuggest) as? Bool) ?? false
         if let data = d.data(forKey: Keys.custom), let arr = try? JSONDecoder().decode([Provider].self, from: data) { customProviders = arr }

@@ -379,6 +379,9 @@ enum L {
     }
 
     // MARK: - Language names (offline transcription language + notes output language pickers)
+    static let liveAlwaysOnTop = LStr(en: "Always on top", zh: "始终置顶")
+    static let liveMicUnavailable = LStr(en: "Me unavailable. Live transcription uses System audio only.",
+                                          zh: "麦克风不可用。实时转录仅使用系统音频。")
     static let langAuto = LStr(en: "Auto-detect", zh: "自动检测")
     static let langEnglish = LStr(en: "English", zh: "英语")
     static let langChinese = LStr(en: "Chinese", zh: "中文")

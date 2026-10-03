@@ -5,7 +5,7 @@ import AppKit
 import Combine
 import MeetGistKit
 
-/// Floating non-activating panel showing Live Assist's current understanding
+/// Non-activating panel with optional floating behavior showing Live Assist's current understanding
 /// while recording (plan §5.12). Pattern: `MiniController`. Visible only
 /// while recording/paused **and** Live Assist is enabled. Finalized ASR
 /// turns append to a timestamped transcript; semantic results update the
@@ -20,15 +20,19 @@ final class LiveAssistPanel {
     init(state: AppState, loc: Localization) {
         self.state = state
         self.loc = loc
-        state.$state.combineLatest(state.$liveAssistEnabled)
+        state.$state.combineLatest(state.$liveAssistEnabled, state.$liveAssistAlwaysOnTop)
             .receive(on: RunLoop.main)
-            .sink { [weak self] recState, enabled in self?.update(recState, enabled) }
+            .sink { [weak self] recState, enabled, alwaysOnTop in
+                self?.update(recState, enabled, alwaysOnTop: alwaysOnTop)
+            }
             .store(in: &bag)
     }
 
-    private func update(_ recState: RecState, _ enabled: Bool) {
+    private func update(_ recState: RecState, _ enabled: Bool, alwaysOnTop: Bool) {
         let show = enabled && (recState == .recording || recState == .paused)
         show ? present() : dismiss()
+        panel?.isFloatingPanel = alwaysOnTop
+        panel?.level = alwaysOnTop ? .floating : .normal
     }
 
     private func present() {
@@ -48,8 +52,8 @@ final class LiveAssistPanel {
                                 backing: .buffered, defer: false)
             panel.title = loc.t(L.liveAssist)
             panel.appearance = NSAppearance(named: .darkAqua)
-            panel.isFloatingPanel = true
-            panel.level = .floating
+            panel.isFloatingPanel = state.liveAssistAlwaysOnTop
+            panel.level = state.liveAssistAlwaysOnTop ? .floating : .normal
             panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.hasShadow = true
@@ -78,7 +82,7 @@ private struct LiveAssistPanelView: View {
 }
 
 private struct LiveAssistPanelContent: View {
-    let state: AppState
+    @ObservedObject var state: AppState
     @ObservedObject var liveAssist: LiveAssistState
     let loc: Localization
     @CompatibleState private var collapsed = false
@@ -92,7 +96,33 @@ private struct LiveAssistPanelContent: View {
         VStack(alignment: .leading, spacing: 0) {
             header(snapshot)
                 .padding(16)
+            RecordingControllerView(embedded: true)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
             if !collapsed {
+                if let error = snapshot.micCaptureError {
+                    Text(loc.t(L.liveMicUnavailable))
+                        .font(Theme.ui(12)).foregroundStyle(Theme.amber)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(error)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
+                }
+                Picker(loc.t(L.language), selection: $state.liveTranscriptionLanguage) {
+                    Text(loc.t(L.langEnglish)).tag("en")
+                    Text(loc.t(L.langAuto)).tag("auto")
+                    Text(loc.t(L.langVietnamese)).tag("vi")
+                    Text(loc.t(L.langChinese)).tag("zh")
+                    Text(loc.t(L.langSpanish)).tag("es")
+                    Text(loc.t(L.langFrench)).tag("fr")
+                    Text(loc.t(L.langGerman)).tag("de")
+                    Text(loc.t(L.langJapanese)).tag("ja")
+                    Text(loc.t(L.langKorean)).tag("ko")
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
                 Picker(loc.t(L.liveAssist), selection: $showingTranscript) {
                     Text(loc.t(L.transcript)).tag(true)
                     Text(loc.t(L.liveAssist)).tag(false)
@@ -100,37 +130,53 @@ private struct LiveAssistPanelContent: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
-                ScrollView(.vertical) {
-                    Group {
-                        if showingTranscript {
-                            transcriptSection(snapshot)
-                        } else {
-                            VStack(alignment: .leading, spacing: 14) {
-                                meaningSection(snapshot)
-                                questionSection(snapshot)
-                                if hasActiveQuestion(snapshot) { suggestAnswerRow(snapshot) }
-                                if hasNotes(snapshot) { notesSection(snapshot) }
-                                if snapshot.v2AnswerInFlight || snapshot.v2Answer != nil || snapshot.v2Error != nil {
-                                    answerSection(snapshot)
+                GeometryReader { viewport in
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical) {
+                            Group {
+                                if showingTranscript {
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        transcriptSection(snapshot)
+                                        Color.clear.frame(height: 1).id("live-transcript-bottom")
+                                        Color.clear.frame(height: viewport.size.height / 2)
+                                    }
+                                } else {
+                                    VStack(alignment: .leading, spacing: 14) {
+                                        meaningSection(snapshot)
+                                        questionSection(snapshot)
+                                        if hasActiveQuestion(snapshot) { suggestAnswerRow(snapshot) }
+                                        if hasNotes(snapshot) { notesSection(snapshot) }
+                                        if snapshot.v2AnswerInFlight || snapshot.v2Answer != nil || snapshot.v2Error != nil {
+                                            answerSection(snapshot)
+                                        }
+                                    }
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 16)
+                            .textSelection(.enabled)
+                        }
+                        .onAppear { if showingTranscript { proxy.scrollTo("live-transcript-bottom", anchor: .center) } }
+                        .onChange(of: snapshot.latestTranscriptTurn?.id) { _, _ in
+                            if showingTranscript { proxy.scrollTo("live-transcript-bottom", anchor: .center) }
+                        }
+                        .onChange(of: showingTranscript) { _, transcript in
+                            if transcript { proxy.scrollTo("live-transcript-bottom", anchor: .center) }
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-                    .textSelection(.enabled)
                 }
-                Divider()
-                askMeetGistSection
-                    .padding(16)
+                if !showingTranscript {
+                    Divider()
+                    askMeetGistSection
+                        .padding(16)
+                }
             }
         }
         .frame(minWidth: 440, maxWidth: .infinity, minHeight: 360, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.panel.opacity(0.97))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .animation(.easeInOut(duration: 0.2), value: snapshot.version)
         .onChange(of: snapshot.latestTranscriptTurn?.id) { _, newID in
             if let newID { state.stampLiveUIUpdate(turnID: newID) }
         }
@@ -141,8 +187,13 @@ private struct LiveAssistPanelContent: View {
             Text(loc.t(L.liveAssist).uppercased())
                 .font(Theme.mono(10, .semibold)).foregroundStyle(Theme.muted)
             Spacer()
-            StatusPill(color: statusColor(snapshot.status), text: statusText(snapshot.status, loc),
-                      pulse: snapshot.status == .analyzing)
+            Toggle(loc.t(L.liveAlwaysOnTop), isOn: $state.liveAssistAlwaysOnTop)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .font(Theme.ui(11))
+            StatusPill(color: state.state == .paused ? Theme.amber : statusColor(snapshot.status),
+                       text: state.state == .paused ? loc.t(L.paused) : statusText(snapshot.status, loc),
+                       pulse: state.state != .paused && snapshot.status == .analyzing)
             Button { collapsed.toggle() } label: {
                 Image(systemName: collapsed ? "chevron.down" : "chevron.up").font(.system(size: 9))
             }.buttonStyle(.plain).foregroundStyle(Theme.muted)

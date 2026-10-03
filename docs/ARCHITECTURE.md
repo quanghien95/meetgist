@@ -260,7 +260,7 @@ by default (`AppState.liveAssistEnabled`). It never feeds the canonical
 ```text
 SystemAudioRecorder's live PCM sink ─┐
                                      ├─ LiveAudioFeed (per track: mono, 16kHz)
-LiveMicTap (AVAudioEngine, no VP) ───┘        │
+LiveMicTap (AVAudioEngine, native echo cancellation) ───┘        │
                                        SpeechEndpointer (energy VAD)
                                                │  finalized SpeechSegment
                                        RealtimeTranscriber
@@ -288,6 +288,9 @@ The floating Live Assist panel opens at 640 × 720 points (bounded by the
 screen's available space) and can be resized using its native window edges
 or corners, down to 440 × 360 points. Its content wraps to the current width
 and scrolls vertically, while the header and Ask Meet Gist input stay visible.
+The panel embeds the mini controller's elapsed timer, Pause/Resume, Stop and
+Me/System meters in a single compact row. While Live Assist is enabled, the standalone mini controller
+is hidden; switching Live Assist off restores it if Mini presence is selected.
 Transcript text is selectable and no longer truncated to two lines. Snapshot
 updates preserve the window size; hiding and showing the same panel retains
 its current size and position for the app session.
@@ -296,7 +299,13 @@ The panel opens on a Transcript tab showing a chronological history of
 finalized, live-filter-accepted ASR turns, with a start–end timestamp relative
 to the recording anchor and a speaker/mic label for every utterance. Earlier
 text stays available as new turns arrive; it is selectable and scrollable,
-and new turns do not force the reader to jump to the bottom. The separate
+and automatically scrolls to the newest turn as it arrives, with half a viewport
+of trailing whitespace so the latest text ends near the middle. An Always on top
+toggle controls the window level; it defaults off and persists across launches. The panel includes a live ASR language picker: English by default, with
+Auto-detect and explicit languages. This preference is persisted separately
+from offline transcription and notes languages. Switching applies to the next
+ASR request without reloading the worker or clearing history; an in-flight
+request finishes in its original language. The separate
 Live Assist tab retains the meaning, questions, notes and suggested answers.
 This reading history is kept in memory for the live session and survives
 status changes, provider changes and stopping that session. A new live
@@ -328,6 +337,41 @@ back for transcription or notes, and it is deleted along with the rest of the
 meeting folder like any other file in it (`MeetingStore.list`/`Exporter`
 never look inside it; delete is a plain `NSWorkspace.recycle` of the whole
 session directory).
+
+Live endpointing closes at 800 ms of silence, or at a 350 ms pause after
+10 seconds, with a 20-second hard cap for uninterrupted speech. These are
+local preview latency settings; the canonical post-meeting pipeline is
+unchanged. The worker caps generation at 512 tokens and discards exhausted
+results instead of publishing runaway text. Pause clears queued segments and
+invalidates in-flight ASR results, including results returning after Resume.
+
+The live mic enables Apple's native Voice Processing I/O before installing
+its tap and requests a mono Float32 uplink at the processed sample rate.
+A native multichannel aggregate is never averaged into the mic track. AGC is off;
+other-audio ducking is set to the minimum with advanced ducking off. No mic
+or system audio is played back by this engine. Start failure disables the
+Me live track and publishes a persistent warning rather than reverting to
+raw mic; System transcription and the canonical recorder continue. Stop and
+failed start disable voice processing to release its I/O configuration.
+Wide Spectrum mode is rejected at startup because it can bypass processing;
+Standard or Voice Isolation is required.
+This is live-only: the canonical `mic.m4a` remains the raw recording. Actual
+acoustic suppression depends on the audio route and the OS mic mode, and
+must be tested with speaker-only, mic-only, and simultaneous speech.
+Apple documents these APIs in WWDC23 "What's new in voice processing":
+https://developer.apple.com/videos/play/wwdc2023/10235/ .
+
+System/mic echo matching uses the transcript's speech timestamps independently
+of the small semantic context ring. If the mic finishes first, a later
+matching system turn retracts the mic echo from the reading history, pending
+semantic batch, Ask context, and saved `live/turns.jsonl`. This remains a secondary text
+heuristic, not speaker identification; independent mic speech stays available. Already dispatched semantic calls may
+have consumed the mic turn when Analyze Mic is enabled.
+
+The System meter reads every Float32 channel with a correctly sized buffer
+list, including planar stereo, before downmixing. Pausing clears both meters.
+The live panel shows Paused explicitly, avoids animating transcript updates,
+and keeps Ask controls on the Assist tab where answers are displayed.
 
 Realtime ASR (`LiveASRRuntimeManager`) is a separate app-managed runtime root
 from the one-shot offline Qwen3-ASR engine — same pinned `mlx-audio` stack,
@@ -429,8 +473,13 @@ guarded completions, settings persistence, key/notes readiness) is covered in
 closure, local-runtime manager instances, `pipelineFactory`/
 `notesWriterFactory`), which keep tests from touching the real UserDefaults
 domain, `~/Documents/meetgist`, Keychain, or Application Support. Real
-recording (`SessionRecorder`/ScreenCaptureKit) and OS permissions are not
-covered by any test and need manual verification. It adds the extra framework
+recording (`SessionRecorder`/ScreenCaptureKit) and OS permissions still need
+manual verification. An explicitly enabled hardware check,
+`MEETGIST_LIVE_MIC_CHECK=1 make test`, verifies native Voice Processing mic
+startup, mono PCM delivery, teardown and restart with existing Microphone
+permission; it never prompts for permission, saves captured audio or uses
+ASR/cloud providers. It does not prove acoustic suppression or preservation
+of simultaneous near-end speech — those require the YouTube/mic app check. It adds the extra framework
 flags Swift Testing needs under the Command Line Tools. A clean SwiftPM build of
 `MeetGistApp` works with macOS 27 Command Line Tools: the pinned local
 `Vendor/KeyboardShortcuts` copy omits preview-only macros, and app state uses

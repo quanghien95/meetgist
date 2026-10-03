@@ -40,6 +40,18 @@ public final class LiveCopilotPersistence {
         append(line + Data([0x0A]), to: turnsURL)
     }
 
+    /// Reconcile a mic echo that arrived before its system counterpart.
+    /// Atomic replacement keeps the saved reading history aligned with UI.
+    func replaceTurns(_ turns: [LiveTranscriptTurn]) {
+        var data = Data()
+        for turn in turns {
+            guard let line = try? JSONEncoder().encode(turn) else { return }
+            data.append(line)
+            data.append(0x0A)
+        }
+        try? data.write(to: turnsURL, options: .atomic)
+    }
+
     /// Writes `state.json` unless it was written less than
     /// `stateWriteMinInterval` ago and `force` is false.
     func writeState(_ state: LiveMeetingState, force: Bool = false) {

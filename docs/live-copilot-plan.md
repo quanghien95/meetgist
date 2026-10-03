@@ -61,7 +61,7 @@ what is still unverified):
   Deviations from this document (folded into §3/§5.4 below — **latency-first
   decision, coordinator-directed**): the live ASR runtime now pins the
   **0.6B-4bit** model by default (not 8bit); the endpointer's hangover/soft-
-  max/hard-max defaults are shorter (0.6 s / 15 s+0.25 s / 30 s, not 0.8 s /
+  max/hard-max defaults are shorter (0.8 s / 10 s+0.35 s / 20 s, not 0.8 s /
   25 s+0.3 s / 45 s); the semantic prompt uses 2–3 recent turns and a
   smaller compact-state view (not 5 / last-12), a lower `maxOutputTokens`
   (350, not 700) and a shorter HTTP timeout (8 s, not 12 s); Codex CLI

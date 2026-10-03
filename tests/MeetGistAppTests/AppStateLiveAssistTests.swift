@@ -86,6 +86,45 @@ import MeetGistKit
         }
     }
 
+    private actor LanguageTrackingTranscriber: RealtimeTranscriber {
+        nonisolated let label = "Language tracking"
+        private(set) var language: String?
+        private(set) var prepareCount = 0
+        func prepare() async throws { prepareCount += 1 }
+        func transcribe(_ segment: SpeechSegment) async throws -> String { "" }
+        func setLanguage(_ language: String) async { self.language = language }
+        func shutdown() async {}
+    }
+
+    @Test func liveLanguageDefaultsToEnglishAndChangesWithoutRestarting() async throws {
+        let (state, cleanup) = try AppStateTestSupport.makeAppState()
+        defer { cleanup() }
+        #expect(state.liveTranscriptionLanguage == "en")
+        state.offlineLanguage = "vi"
+        state.liveAssistEnabled = true
+        let transcriber = LanguageTrackingTranscriber()
+        var factoryLanguage: String?
+        state.liveTranscriberFactory = { _, language, _, _ in
+            factoryLanguage = language
+            return transcriber
+        }
+        state.liveAudioSourceFactory = { _ in (FakeLiveAudioSource(), nil) }
+        let recorder = try SessionRecorder(outputDir: state.outputDir)
+        state.startLiveAssistIfEnabled(recorder: recorder, sessionDir: recorder.sessionDir)
+        try await AppStateTestSupport.waitUntil { state.liveAssist.isActive }
+        #expect(factoryLanguage == "en")
+        state.liveTranscriptionLanguage = "auto"
+        let deadline = Date().addingTimeInterval(2)
+        while await transcriber.language != "auto", Date() < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await transcriber.language == "auto")
+        #expect(state.defaults.string(forKey: "MeetGistLiveTranscriptionLanguage") == "auto")
+        #expect(state.offlineLanguage == "vi")
+        #expect(await transcriber.prepareCount == 1)
+        await state.stopLiveAssist()
+    }
+
     /// Disabled → none of the injected factories are ever called, and
     /// `liveAssist` stays inert. Exercises `startLiveAssistIfEnabled`
     /// directly, since real recording can't run headless in a test.
@@ -222,7 +261,7 @@ import MeetGistKit
         try await AppStateTestSupport.waitUntil { state.liveAssistSession != nil }
 
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 1_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 2_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
 
         try await AppStateTestSupport.waitUntil { state.liveAssist.snapshot.lastQuestionID != nil }
         // Give any (incorrect) auto-fire a chance to happen before asserting
@@ -254,7 +293,7 @@ import MeetGistKit
         try await AppStateTestSupport.waitUntil { state.liveAssistSession != nil }
 
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 1_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 2_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
 
         try await AppStateTestSupport.waitUntil { state.liveAssist.snapshot.v2Answer != nil }
         #expect(state.liveAssist.snapshot.v2Answer?.answer == "Yes, Friday works.")

@@ -95,6 +95,25 @@ import AudioToolbox
         return sampleBuffer
     }
 
+    @Test func meterReadsAllPlanarStereoChannelsWithoutDownmixCancellation() throws {
+        let sb = try makeSampleBuffer(interleaved: false, channelCount: 2, sampleRate: 48_000, frameCount: 8) { c, _ in
+            c == 0 ? 0.5 : -0.5
+        }
+        let peak = try #require(SystemAudioRecorder.systemPeakDBFS(from: sb))
+        #expect(abs(peak - (-6.0206)) < 0.001)
+    }
+
+    @Test func meterReadsInterleavedStereoAndSilence() throws {
+        for interleaved in [true, false] {
+            let sb = try makeSampleBuffer(interleaved: interleaved, channelCount: 2, sampleRate: 48_000, frameCount: 8) { c, _ in
+                c == 0 ? 0 : 0.25
+            }
+            #expect(abs(try #require(SystemAudioRecorder.systemPeakDBFS(from: sb)) - (-12.0412)) < 0.001)
+            let silent = try makeSampleBuffer(interleaved: interleaved, channelCount: 2, sampleRate: 48_000, frameCount: 8) { _, _ in 0 }
+            #expect(SystemAudioRecorder.systemPeakDBFS(from: silent) == -160)
+        }
+    }
+
     @Test func interleavedStereoIsCopiedThroughUnchanged() throws {
         let sb = try makeSampleBuffer(interleaved: true, channelCount: 2, sampleRate: 48_000, frameCount: 4) { c, f in
             Float(c == 0 ? f + 1 : -(f + 1)) // L: 1,2,3,4  R: -1,-2,-3,-4

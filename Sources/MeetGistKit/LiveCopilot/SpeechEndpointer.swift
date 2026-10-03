@@ -31,17 +31,15 @@ public struct LiveEndpointerConfig: Sendable, Equatable {
     /// Segments with less voiced audio than this are discarded entirely.
     public var minVoicedSeconds: Double
 
-    // Latency-first defaults (2026-09-27 decision, plan §3 "latency first"):
-    // the post-meeting pipeline already produces the accurate
-    // transcript/notes, so Live Assist favors shorter turns/faster cuts over
-    // maximally clean segmentation.
+    // Keep brief clause pauses within a turn. Bound uninterrupted speech
+    // so preview latency stays finite without cutting every few seconds.
     public init(sampleRate: Double = 16_000, frameSeconds: Double = 0.030,
                 floorMarginDB: Double = 10, absoluteFloorDBFS: Double = -50,
                 noiseFloorEMAAlpha: Double = 0.05,
                 startVoicedSeconds: Double = 0.150, startWindowSeconds: Double = 0.300,
-                preRollSeconds: Double = 0.300, hangoverSeconds: Double = 0.600,
-                softMaxSeconds: Double = 15, softMaxPauseSeconds: Double = 0.250,
-                hardMaxSeconds: Double = 30, minVoicedSeconds: Double = 0.500) {
+                preRollSeconds: Double = 0.300, hangoverSeconds: Double = 0.800,
+                softMaxSeconds: Double = 10, softMaxPauseSeconds: Double = 0.350,
+                hardMaxSeconds: Double = 20, minVoicedSeconds: Double = 0.500) {
         self.sampleRate = sampleRate
         self.frameSeconds = frameSeconds
         self.floorMarginDB = floorMarginDB

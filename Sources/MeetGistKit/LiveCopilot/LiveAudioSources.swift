@@ -35,8 +35,9 @@ public enum LiveMicTapError: Error, LocalizedError, Sendable {
 
 /// Dedicated `AVAudioEngine` input tap feeding the mic ("Me") live track
 /// (plan §5.10). Deliberately separate from `MicRecorder` (`AVAudioRecorder`,
-/// unchanged) — no voice processing, no echo cancellation, just a raw tap on
-/// the input node. Started only after `SessionRecorder.start()` succeeded and
+/// unchanged). Apple's Voice Processing I/O removes loudspeaker echo before
+/// audio reaches VAD/ASR. This live-only engine never plays captured audio.
+/// Started only after `SessionRecorder.start()` succeeded and
 /// stopped before `SessionRecorder.stop()`; any failure here must never
 /// affect recording — the caller treats it as "Speaker-only live mode".
 public final class LiveMicTap: LiveAudioSource, @unchecked Sendable {
@@ -48,28 +49,52 @@ public final class LiveMicTap: LiveAudioSource, @unchecked Sendable {
     public func start(onChunk: @escaping @Sendable (LivePCMChunk) -> Void) async throws {
         guard !started else { return }
         let input = engine.inputNode
-        let format = input.inputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw LiveMicTapError.unavailable("Microphone input format unavailable for Live Assist.")
-        }
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, when in
-            guard let chunk = Self.chunk(from: buffer, when: when) else { return }
-            onChunk(chunk)
-        }
-        engine.prepare()
+        var tapInstalled = false
         do {
+            // Enabling either I/O node enables both. Configure while stopped,
+            // then query the processed OUTPUT format: VP may change it.
+            try input.setVoiceProcessingEnabled(true)
+            input.isVoiceProcessingBypassed = false
+            input.isVoiceProcessingAGCEnabled = false
+            input.voiceProcessingOtherAudioDuckingConfiguration =
+                AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+            guard input.isVoiceProcessingEnabled, !input.isVoiceProcessingBypassed else {
+                throw LiveMicTapError.unavailable("Microphone echo cancellation is unavailable for this audio device.")
+            }
+            let deviceFormat = input.outputFormat(forBus: 0)
+            guard deviceFormat.sampleRate > 0, deviceFormat.channelCount > 0,
+                  let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                             sampleRate: deviceFormat.sampleRate, channels: 1, interleaved: false) else {
+                throw LiveMicTapError.unavailable("Processed microphone format unavailable for Live Assist.")
+            }
+            // macOS VP can expose an aggregate with extra reference channels.
+            // Request the processed mono uplink, never average that aggregate
+            // back into Me (which would reintroduce system audio).
+            input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, when in
+                guard let chunk = Self.chunk(from: buffer, when: when) else { return }
+                onChunk(chunk)
+            }
+            tapInstalled = true
+            engine.prepare()
             try engine.start()
+            guard AVCaptureDevice.activeMicrophoneMode != .wideSpectrum else {
+                throw LiveMicTapError.unavailable("Choose Standard or Voice Isolation microphone mode to remove speaker echo.")
+            }
+            started = true
         } catch {
-            input.removeTap(onBus: 0)
-            throw error
+            if tapInstalled { input.removeTap(onBus: 0) }
+            engine.stop()
+            try? input.setVoiceProcessingEnabled(false)
+            // Never fall back silently to raw mic and reintroduce echoes.
+            throw LiveMicTapError.unavailable("Live microphone echo cancellation could not start: \(error.localizedDescription)")
         }
-        started = true
     }
 
     public func stop() async {
         guard started else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        try? engine.inputNode.setVoiceProcessingEnabled(false)
         started = false
     }
 

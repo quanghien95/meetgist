@@ -64,7 +64,7 @@ extension AppState {
         // `self` again except through the weak reference below, so a
         // superseded/cancelled Task can never race a later recording's state.
         let logURL = persistence?.asrWorkerLogURL
-        let language = offlineLanguage
+        let language = liveTranscriptionLanguage
         let vocabulary = offlineVocabulary
         let runtime = liveASRRuntime
         let audioFactory = liveAudioSourceFactory
@@ -94,9 +94,17 @@ extension AppState {
             self.liveAssistSession = session
             await session.start()
             guard !Task.isCancelled else { await session.stop(); return }
+            await session.setLanguage(self.liveTranscriptionLanguage)
             self.liveAssist.isActive = true
             await self.observeLiveSnapshots(engine: engine)
         }
+    }
+
+    /// Applies to the next ASR request without reloading the model or clearing history.
+    func liveTranscriptionLanguageDidChange() {
+        guard let session = liveAssistSession else { return }
+        let language = liveTranscriptionLanguage
+        Task { await session.setLanguage(language) }
     }
 
     /// Stops Live Assist for the current recording — called at the very

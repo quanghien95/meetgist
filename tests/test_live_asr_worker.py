@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -31,6 +32,40 @@ def read_lines(stdout: io.StringIO) -> list[dict]:
 
 
 class LiveASRWorkerTests(unittest.TestCase):
+    def test_model_generation_is_bounded_and_exhaustion_is_not_published(self):
+        transcriber = object.__new__(worker._Qwen3ASRTranscriber)
+        class Model:
+            def __init__(self):
+                self.tokens = 10
+                self.kwargs = None
+            def generate(self, audio, **kwargs):
+                self.kwargs = kwargs
+                return SimpleNamespace(text="Valid local speech", generation_tokens=self.tokens)
+        model = Model()
+        transcriber._model = model
+        self.assertEqual(transcriber.transcribe([0.1], language=None, hotwords=None), "Valid local speech")
+        self.assertEqual(model.kwargs["max_tokens"], 512)
+        model.tokens = 512
+        with self.assertRaisesRegex(RuntimeError, "generation budget"):
+            transcriber.transcribe([0.1], language=None, hotwords=None)
+
+    def test_language_can_change_per_request_without_reloading_model(self):
+        requests = [
+            {"type": "transcribe", "id": 1, "pcm_path": "x"},
+            {"type": "transcribe", "id": 2, "pcm_path": "x", "language": "auto"},
+            {"type": "transcribe", "id": 3, "pcm_path": "x", "language": "vi"},
+        ]
+        transcriber = FakeTranscriber()
+        loads = []
+        def factory(model_dir):
+            loads.append(model_dir)
+            return transcriber
+        worker.run_worker(io.StringIO("\n".join(json.dumps(r) for r in requests)), io.StringIO(),
+                          "local-model", "en", None, transcriber_factory=factory,
+                          read_pcm=lambda _: [0.1] * 16000)
+        self.assertEqual(loads, ["local-model"])
+        self.assertEqual([c["language"] for c in transcriber.calls], ["en", None, "vi"])
+
     def test_ready_message_reports_load_time_and_memory(self):
         stdin = io.StringIO("")   # EOF immediately after load — no requests
         stdout = io.StringIO()

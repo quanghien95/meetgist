@@ -132,7 +132,7 @@ private struct AlwaysRespondLLM: CopilotLLM {
 
         // ~1s of voiced audio, then >600ms silence to close the segment via hangover.
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 1_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 2_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
 
         await waitUntil { await session.currentSnapshot().latestTranscriptTurn != nil }
         let snapshot = await session.currentSnapshot()
@@ -162,7 +162,7 @@ private struct AlwaysRespondLLM: CopilotLLM {
 
         await session.resume()
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 5_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 6_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 6_000_000_000)
         await waitUntil { await !transcriber.transcribedSegments.isEmpty }
         #expect(await transcriber.transcribedSegments.count == 1)
         await waitUntil { await session.currentSnapshot().latestTranscriptTurn?.text == "after resume" }
@@ -179,7 +179,7 @@ private struct AlwaysRespondLLM: CopilotLLM {
         await transcriber.failPrepareFromNowOn()
 
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 1_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 2_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
 
         // First failure triggers the one allowed restart attempt, which
         // itself fails (prepare() now always throws) — status stays
@@ -191,9 +191,33 @@ private struct AlwaysRespondLLM: CopilotLLM {
 
         // A second failing turn must not attempt a second restart.
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 5_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 6_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 6_000_000_000)
         try await Task.sleep(for: .milliseconds(150))
         #expect(await transcriber.prepareCount == 2)
+    }
+
+    @Test func pauseDiscardsQueuedAudioAndLateResultEvenAfterResume() async throws {
+        let transcriber = FakeTranscriber(behaviors: [.hang, .respond("fresh after resume")])
+        let (session, speaker) = makeSession(transcriber: transcriber, llm: nil)
+        await session.start()
+        speaker.feed(seconds: 1, loud: true, startHostNs: 1_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
+        await waitUntil { await transcriber.transcribedSegments.count == 1 }
+        #expect(await transcriber.transcribedSegments.count == 1)
+        speaker.feed(seconds: 1, loud: true, startHostNs: 3_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 4_000_000_000)
+        try await Task.sleep(for: .milliseconds(100))
+        await session.pause()
+        await session.resume()
+        await transcriber.release()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await session.currentSnapshot().transcriptTurns.isEmpty)
+        #expect(await transcriber.transcribedSegments.count == 1)
+        speaker.feed(seconds: 1, loud: true, startHostNs: 10_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 11_000_000_000)
+        await waitUntil { await session.currentSnapshot().latestTranscriptTurn?.text == "fresh after resume" }
+        #expect(await session.currentSnapshot().latestTranscriptTurn?.startedAt ?? 0 >= 9)
+        await session.stop()
     }
 
     @Test func stopWhileTranscriptionInFlightNeverPublishes() async throws {
@@ -202,7 +226,7 @@ private struct AlwaysRespondLLM: CopilotLLM {
         await session.start()
 
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 1_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 2_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
         // Give the endpointer/feed pipeline time to finalize the segment and
         // reach the (hanging) transcribe() call.
         await waitUntil { await transcriber.transcribedSegments.count == 1 }
@@ -222,11 +246,14 @@ private struct AlwaysRespondLLM: CopilotLLM {
         await session.start()
         #expect(speaker.started)
         #expect(!mic.started)
+        #expect(await session.currentSnapshot().micCaptureError != nil)
         // Speaker-only mode must still work end to end.
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 1_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 2_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
         await waitUntil { await session.currentSnapshot().latestTranscriptTurn != nil }
         #expect(await session.currentSnapshot().latestTranscriptTurn != nil)
+        #expect(await session.currentSnapshot().micCaptureError != nil)
+        await session.stop()
     }
 
     /// Regression test for review finding F1 (frame ordering / actor
@@ -249,7 +276,7 @@ private struct AlwaysRespondLLM: CopilotLLM {
         for i in 0..<3 {
             let base = UInt64(i) * 3_000_000_000 + 1_000_000_000
             speaker.feed(seconds: 1.0, loud: true, startHostNs: base)
-            speaker.feed(seconds: 0.7, loud: false, startHostNs: base + 1_000_000_000)
+            speaker.feed(seconds: 1.0, loud: false, startHostNs: base + 1_000_000_000)
         }
 
         await waitUntil(timeoutSeconds: 5) { await transcriber.transcribedSegments.count == 3 }
@@ -287,18 +314,18 @@ private struct AlwaysRespondLLM: CopilotLLM {
 
         // Segment 1 (speaker) starts the hanging in-flight transcribe() call.
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 1_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 2_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 2_000_000_000)
         await waitUntil { await transcriber.transcribedSegments.count == 1 }
 
         // 2 more mic segments + 1 more speaker segment finalize while ASR is
         // still stuck on segment 1 — capacity 2 means at least one queued
         // segment must be dropped; it must always be a mic one.
         mic.feed(seconds: 1.0, loud: true, startHostNs: 3_000_000_000)
-        mic.feed(seconds: 0.7, loud: false, startHostNs: 4_000_000_000)
+        mic.feed(seconds: 1.0, loud: false, startHostNs: 4_000_000_000)
         speaker.feed(seconds: 1.0, loud: true, startHostNs: 5_000_000_000)
-        speaker.feed(seconds: 0.7, loud: false, startHostNs: 6_000_000_000)
+        speaker.feed(seconds: 1.0, loud: false, startHostNs: 6_000_000_000)
         mic.feed(seconds: 1.0, loud: true, startHostNs: 7_000_000_000)
-        mic.feed(seconds: 0.7, loud: false, startHostNs: 8_000_000_000)
+        mic.feed(seconds: 1.0, loud: false, startHostNs: 8_000_000_000)
         try await Task.sleep(for: .milliseconds(200))
 
         await transcriber.release()

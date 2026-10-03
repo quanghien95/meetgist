@@ -62,6 +62,7 @@ public actor QwenLiveTranscriber: RealtimeTranscriber {
 
     public nonisolated let label = "Qwen3-ASR Live"
 
+    private var language: String
     private let config: Config
     private let workDir: URL
 
@@ -82,6 +83,7 @@ public actor QwenLiveTranscriber: RealtimeTranscriber {
 
     public init(config: Config) {
         self.config = config
+        self.language = config.language ?? "auto"
         self.workDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("meetgist-live-asr-\(UUID().uuidString)", isDirectory: true)
     }
@@ -149,6 +151,8 @@ public actor QwenLiveTranscriber: RealtimeTranscriber {
             }
         }
     }
+
+    public func setLanguage(_ language: String) async { self.language = language }
 
     public func transcribe(_ segment: SpeechSegment) async throws -> String {
         guard startupFailure == nil else { throw startupFailure! }
@@ -220,7 +224,7 @@ public actor QwenLiveTranscriber: RealtimeTranscriber {
         }
         dispatchedRequest = (next.id, next.continuation, pcmPath)
         let payload: [String: Any] = [
-            "type": "transcribe", "id": next.id, "pcm_path": pcmPath.path, "sample_rate": 16_000,
+            "type": "transcribe", "id": next.id, "pcm_path": pcmPath.path, "sample_rate": 16_000, "language": language,
         ]
         guard let stdinHandle, let data = try? JSONSerialization.data(withJSONObject: payload) else {
             failDispatched(with: QwenLiveTranscriberError.unavailable("worker stdin unavailable"))

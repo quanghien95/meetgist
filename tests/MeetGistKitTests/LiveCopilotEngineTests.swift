@@ -124,6 +124,71 @@ private func waitUntil(timeoutSeconds: Double = 2, _ condition: () async -> Bool
         LiveCopilotEngine(config: .init(language: "English"), llm: llm)
     }
 
+    /// Optional local replay, with no LLM or writes to the original meeting.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MEETGIST_LIVE_REPLAY_TURNS"] != nil))
+    func recordedTurnsReplayHasNoRemainingCrossTrackEchoes() async throws {
+        let path = try #require(ProcessInfo.processInfo.environment["MEETGIST_LIVE_REPLAY_TURNS"])
+        let input = try String(contentsOfFile: path).split(separator: "\n").map {
+            try JSONDecoder().decode(LiveTranscriptTurn.self, from: Data($0.utf8))
+        }
+        #expect(!input.isEmpty)
+        for micFirst in [false, true] {
+            let engine = makeEngine(llm: nil)
+            let replay = micFirst ? input.sorted { a, b in
+                if a.track != b.track { return a.track == .me }
+                return a.id < b.id
+            } : input
+            for t in replay { await engine.ingest(t) }
+            let history = await engine.currentSnapshot().transcriptTurns
+            let filter = LiveTurnFilter()
+            let speakers = history.filter { $0.track == .speaker }
+            for mic in history where mic.track == .me {
+                #expect(!speakers.contains { filter.isMicEcho(mic, of: $0) })
+            }
+            #expect(!speakers.isEmpty)
+            print("[local replay] input=\(input.count), accepted=\(history.count), system=\(speakers.count), micFirst=\(micFirst)")
+        }
+    }
+
+    @Test func echoReconciliationKeepsSystemInEitherArrivalOrderAndPersistence() async throws {
+        for micFirst in [true, false] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let persistence = try #require(LiveCopilotPersistence(sessionDir: root))
+            let engine = LiveCopilotEngine(config: .init(), llm: nil, persistence: persistence)
+            let mic = LiveTranscriptTurn(id: 1, track: .me, startedAt: 10, endedAt: 12, text: "The deadline is next Friday for sure")
+            let speaker = LiveTranscriptTurn(id: 2, track: .speaker, startedAt: 10.1, endedAt: 12.2, text: "The deadline is next Friday for sure")
+            for t in micFirst ? [mic, speaker] : [speaker, mic] { await engine.ingest(t) }
+            #expect(await engine.currentSnapshot().transcriptTurns == [speaker])
+            #expect(await engine.currentState().recentTurns == [speaker])
+            let lines = try String(contentsOf: root.appendingPathComponent("live/turns.jsonl")).split(separator: "\n")
+            let saved = try lines.map { try JSONDecoder().decode(LiveTranscriptTurn.self, from: Data($0.utf8)) }
+            #expect(saved == [speaker])
+        }
+    }
+
+    @Test func longSpeakerTurnReconcilesSplitMicEchoesBeyondContextRing() async {
+        let engine = makeEngine(llm: nil)
+        await engine.ingest(LiveTranscriptTurn(id: 1, track: .me, startedAt: 10, endedAt: 12,
+                                               text: "The deadline is next Friday for sure"))
+        for id in 2...12 { await engine.ingest(turn(id, "Unrelated distinct utterance number \(id)", track: .me)) }
+        let speaker = LiveTranscriptTurn(id: 13, track: .speaker, startedAt: 10, endedAt: 18,
+                                          text: "The deadline is next Friday for sure and delivery follows on Monday")
+        await engine.ingest(speaker)
+        let history = await engine.currentSnapshot().transcriptTurns
+        #expect(!history.contains { $0.id == 1 })
+        #expect(history.contains(speaker))
+    }
+
+    @Test func echoReconciliationPreservesDistinctMicSpeechAndLaterRepetition() async {
+        let engine = makeEngine(llm: nil)
+        let mic = LiveTranscriptTurn(id: 1, track: .me, startedAt: 10, endedAt: 12, text: "Please update the budget instead")
+        let speaker = LiveTranscriptTurn(id: 2, track: .speaker, startedAt: 10, endedAt: 12, text: "The deadline is next Friday for sure")
+        let repeated = LiveTranscriptTurn(id: 3, track: .me, startedAt: 60, endedAt: 62, text: speaker.text)
+        for t in [mic, speaker, repeated] { await engine.ingest(t) }
+        #expect(await engine.currentSnapshot().transcriptTurns == [mic, speaker, repeated])
+    }
+
     @Test func transcriptHistoryRetainsTurnsBeyondBothPromptContextLimits() async {
         let engine = makeEngine(llm: nil)
         for id in 1...220 {

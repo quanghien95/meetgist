@@ -70,16 +70,20 @@ public struct LiveTurnFilter: Sendable {
         }) { return true }
 
         if turn.track == .me {
-            let overlapping = recentOtherTrack.filter { other in
-                abs(other.startedAt - turn.startedAt) <= config.micEchoWindowSeconds
-                    || (other.startedAt < turn.endedAt && other.endedAt > turn.startedAt)
-            }
-            if overlapping.contains(where: {
-                LiveTextNormalize.isDuplicate($0.text, trimmed, jaccardThreshold: config.micEchoJaccardThreshold)
-            }) { return true }
+            if recentOtherTrack.contains(where: { isMicEcho(turn, of: $0) }) { return true }
         }
 
         return false
+    }
+
+    /// Shared in both arrival orders: system audio is authoritative when a
+    /// temporally overlapping mic turn contains the same speech.
+    public func isMicEcho(_ mic: LiveTranscriptTurn, of speaker: LiveTranscriptTurn) -> Bool {
+        guard mic.track == .me, speaker.track == .speaker else { return false }
+        let overlaps = abs(speaker.startedAt - mic.startedAt) <= config.micEchoWindowSeconds
+            || (speaker.startedAt < mic.endedAt && speaker.endedAt > mic.startedAt)
+        return overlaps && LiveTextNormalize.isDuplicate(mic.text, speaker.text,
+                                                         jaccardThreshold: config.micEchoJaccardThreshold)
     }
 
     static func isFiller(_ text: String) -> Bool {
